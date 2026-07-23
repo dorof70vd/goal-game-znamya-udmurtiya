@@ -34,6 +34,7 @@
     overlayBtn4: document.getElementById("overlayBtn4"),
     energyStat: document.getElementById("energyStat"),
     streakStat: document.getElementById("streakStat"),
+    diffStat: document.getElementById("diffStat"),
     levelStat: document.getElementById("levelStat"),
     hud: document.getElementById("hud"),
     streakBadge: document.getElementById("streakBadge"),
@@ -90,6 +91,12 @@
     el.streakStat.textContent = `🔥 ${state.streak} дн. подряд`;
     const modeIcon = state.mode === "defense" ? "🧤" : "⚽";
     el.levelStat.textContent = `${modeIcon} ${state.opponentName || ("Соперник №" + state.level)}`;
+    if (state.difficulty && state.difficulty.tier) {
+      el.diffStat.textContent = `🎯 ${state.difficulty.tier}`;
+      el.diffStat.style.display = "";
+    } else {
+      el.diffStat.style.display = "none";
+    }
   }
 
   // ------------------------- Звуки (Web Audio, без файлов) ----------------
@@ -565,9 +572,11 @@
     const modeIcon = isDefense ? "🧤" : "⚽";
     const opponent = currentUser.opponentName || `Соперник №${currentUser.level}`;
     const actionVerb = isDefense ? "Отражай броски" : "Забивай голы";
+    const tierName = (currentUser.difficulty && currentUser.difficulty.tier) || null;
+    const tierSuffix = tierName ? ` Сложность: ${tierName}.` : "";
     const goalPhrase = isDefense
-      ? `Отрази все ${currentUser.shotsPerMatch} бросков — пройдёшь дальше!`
-      : `Забей все ${currentUser.shotsPerMatch} — откроешь следующего соперника!`;
+      ? `Отрази все ${currentUser.shotsPerMatch} бросков — пройдёшь дальше!${tierSuffix}`
+      : `Забей все ${currentUser.shotsPerMatch} — откроешь следующего соперника!${tierSuffix}`;
 
     if (!currentUser.matchDayActive && currentUser.energy < 1) {
       showOverlay({
@@ -647,6 +656,9 @@
             ? `Попробуй отразить все ${match.shotsPerMatch} бросков — это пропустит тебя дальше.`
             : `Попробуй выбить все ${match.shotsPerMatch} — это откроет следующего соперника.`);
 
+      if (res.tierChanged && res.tierName) {
+        text += `\n\n🎖️ Новый уровень сложности: ${res.tierName}!`;
+      }
       if (res.newAchievements && res.newAchievements.length) {
         const names = res.newAchievements.map(achievementTitle).join(", ");
         text += `\n\n🏅 Новое достижение: ${names}!`;

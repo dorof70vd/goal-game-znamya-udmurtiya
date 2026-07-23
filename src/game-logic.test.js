@@ -301,4 +301,39 @@ check("достижения за стрик и уровень срабатыва
   assert.ok(newly.includes("goals_200"));
 });
 
+check("именные уровни сложности разбиты на три равные трети", () => {
+  assert.strictEqual(logic.getDifficultyTierName(1), "Лёгкий");
+  assert.strictEqual(logic.getDifficultyTierName(10), "Лёгкий");
+  assert.strictEqual(logic.getDifficultyTierName(11), "Средний");
+  assert.strictEqual(logic.getDifficultyTierName(20), "Средний");
+  assert.strictEqual(logic.getDifficultyTierName(21), "Мастер");
+  assert.strictEqual(logic.getDifficultyTierName(30), "Мастер");
+});
+
+check("getKeeperDifficulty включает название текущего уровня сложности", () => {
+  assert.strictEqual(logic.getKeeperDifficulty(5).tier, "Лёгкий");
+  assert.strictEqual(logic.getKeeperDifficulty(15).tier, "Средний");
+  assert.strictEqual(logic.getKeeperDifficulty(25).tier, "Мастер");
+});
+
+check("переход на новый уровень сложности отмечается флагом tierChanged", () => {
+  const u = freshUser({ energy: 3, level: 10 }); // level 10 -> attack, ещё "Лёгкий"
+  const now = Date.now();
+  const token = logic.startMatch(u, now);
+  const res = logic.submitMatchResult(u, token, 5, now + 500);
+  assert.strictEqual(res.newLevel, 11);
+  assert.strictEqual(res.tierChanged, true);
+  assert.strictEqual(res.tierName, "Средний");
+});
+
+check("без смены уровня сложности флаг tierChanged не срабатывает", () => {
+  const u = freshUser({ energy: 3, level: 3 });
+  const now = Date.now();
+  const token = logic.startMatch(u, now);
+  const res = logic.submitMatchResult(u, token, 5, now + 500);
+  assert.strictEqual(res.newLevel, 4);
+  assert.strictEqual(res.tierChanged, false);
+  assert.strictEqual(res.tierName, "Лёгкий");
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);

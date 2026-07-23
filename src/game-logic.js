@@ -222,6 +222,22 @@ function ensureCurrentWeek(user, now = Date.now()) {
   return user;
 }
 
+// Именные "этажи" сложности поверх уже существующей плавной прогрессии —
+// чтобы игроку было наглядно видно "я прошёл Лёгкий, играю на Среднем", а не
+// просто безликие цифры уровня. Прогресс между этажами остаётся автоматическим
+// (как и раньше — забил идеальный матч, перешёл на уровень выше).
+const DIFFICULTY_TIERS = [
+  { name: "Лёгкий", maxLevel: Math.round(MAX_LEVEL / 3) },
+  { name: "Средний", maxLevel: Math.round((MAX_LEVEL / 3) * 2) },
+  { name: "Мастер", maxLevel: MAX_LEVEL },
+];
+
+function getDifficultyTierName(level) {
+  const lvl = Math.max(1, Math.min(MAX_LEVEL, Math.round(level)));
+  const tier = DIFFICULTY_TIERS.find((t) => lvl <= t.maxLevel);
+  return tier ? tier.name : DIFFICULTY_TIERS[DIFFICULTY_TIERS.length - 1].name;
+}
+
 /** Параметры сложности вратаря на заданном уровне. */
 function getKeeperDifficulty(level) {
   const lvl = Math.max(1, Math.min(MAX_LEVEL, level));
@@ -231,7 +247,8 @@ function getKeeperDifficulty(level) {
   const coverage = Math.min(0.85, 0.35 + lvl * 0.016);
   // Случайные финты (вратарь иногда стартует в неверную сторону)
   const feintChance = Math.min(0.35, lvl * 0.01);
-  return { level: lvl, reactionMs, coverage, feintChance };
+  const tier = getDifficultyTierName(lvl);
+  return { level: lvl, reactionMs, coverage, feintChance, tier };
 }
 
 function canStartMatch(user, unlimited = false) {
@@ -273,12 +290,15 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
   user.bestScore = Math.max(user.bestScore, safeGoals);
 
   const perfect = safeGoals === SHOTS_PER_MATCH;
+  const prevLevel = user.level;
   if (perfect && user.level < MAX_LEVEL) {
     user.level += 1;
   }
   user.activeMatch = null;
 
   const newAchievements = checkAchievements(user, { goals: safeGoals, mode, perfect });
+  const newTier = getDifficultyTierName(user.level);
+  const tierChanged = perfect && newTier !== getDifficultyTierName(prevLevel);
 
   return {
     goals: safeGoals,
@@ -289,6 +309,8 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
     weekGoals: user.weekGoals,
     bestScore: user.bestScore,
     newAchievements,
+    tierChanged,
+    tierName: newTier,
   };
 }
 
@@ -323,6 +345,7 @@ module.exports = {
   NEWS_BONUS_CEILING_EXTRA,
   OPPONENTS,
   ACHIEVEMENTS,
+  DIFFICULTY_TIERS,
   dateKey,
   weekKey,
   applyEnergyRegen,
@@ -333,6 +356,7 @@ module.exports = {
   isMatchDayActive,
   ensureCurrentWeek,
   getKeeperDifficulty,
+  getDifficultyTierName,
   getOpponentName,
   getModeForLevel,
   checkAchievements,
