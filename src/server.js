@@ -490,6 +490,41 @@ if (BOT_TOKEN) {
     await ctx.reply(`🏆 Топ недели, ${CLUB_NAME}:\n\n${lines}`);
   });
 
+  // Приватная статистика — видна только администратору (та же проверка
+  // ADMIN_TELEGRAM_ID, что и у /matchday), в отличие от публичного /leaderboard.
+  bot.command("stats", async (ctx) => {
+    const fromId = String(ctx.from.id);
+    if (ADMIN_IDS.length === 0) {
+      await ctx.reply(
+        "ADMIN_TELEGRAM_ID ещё не настроен на сервере — команда пока недоступна никому. " +
+          "Узнай свой ID командой /myid и попроси администратора хостинга вписать его в настройки."
+      );
+      return;
+    }
+    if (!ADMIN_IDS.includes(fromId)) {
+      await ctx.reply("Эта команда только для администратора клуба.");
+      return;
+    }
+    const users = db.getAllUsers();
+    const duels = db.getAllDuels();
+    const stats = logic.buildStats(users, duels);
+    const topLines = stats.topActive.length
+      ? stats.topActive.map((u, i) => `${i + 1}. ${u.name} — ${u.totalGoals} 🥅`).join("\n")
+      : "пока никто не играл";
+    await ctx.reply(
+      `📊 Статистика игры (видна только тебе)\n\n` +
+        `Всего игроков: ${stats.totalPlayers}\n` +
+        `— через Telegram: ${stats.fromTelegram}\n` +
+        `— по обычной ссылке (VK/браузер): ${stats.fromWeb}\n\n` +
+        `Новых сегодня: ${stats.newToday}\n` +
+        `Играли сегодня: ${stats.playedToday}\n` +
+        `Играли на этой неделе: ${stats.playedThisWeek}\n\n` +
+        `Голов забито всего: ${stats.totalGoalsAllTime}\n` +
+        `Дуэлей создано: ${stats.totalDuels} (сыграно до конца: ${stats.finishedDuels})\n\n` +
+        `🏆 Топ по общему числу голов:\n${topLines}`
+    );
+  });
+
   bot.catch((err) => {
     console.error("Ошибка в боте:", err);
   });

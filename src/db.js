@@ -133,6 +133,10 @@ function saveDuel(duel) {
   persist();
 }
 
+function getAllDuels() {
+  return Object.values(state.duels);
+}
+
 module.exports = {
   getUser,
   getOrCreateUser,
@@ -142,4 +146,5 @@ module.exports = {
   setMatchDay,
   getDuel,
   saveDuel,
+  getAllDuels,
 };

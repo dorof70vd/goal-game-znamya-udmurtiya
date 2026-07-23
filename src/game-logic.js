@@ -506,6 +506,64 @@ function buildOpponentRoad(level, behind = 2, ahead = 4) {
   return road;
 }
 
+// ------------------------- Приватная статистика (только для админа) --------
+//
+// Гостевые веб-идентификаторы (см. server.js authOrFail) всегда начинаются с
+// "web_" — по этому признаку отличаем "пришёл через Telegram" от "зашёл по
+// обычной ссылке" в статистике ниже.
+function isWebGuestId(id) {
+  return typeof id === "string" && id.startsWith("web_");
+}
+
+/**
+ * Сводная статистика по игрокам и дуэлям — для приватной команды /stats
+ * (доступна только администратору, см. ADMIN_TELEGRAM_ID в server.js).
+ * Никак не связана с публичным лидербордом — просто цифры для владельца бота.
+ */
+function buildStats(users, duels = [], now = Date.now()) {
+  const todayKey = dateKey(now);
+  const curWeek = weekKey(now);
+
+  let newToday = 0;
+  let playedToday = 0;
+  let playedThisWeek = 0;
+  let fromTelegram = 0;
+  let fromWeb = 0;
+  let totalGoalsAllTime = 0;
+
+  for (const u of users) {
+    if (u.createdAt && dateKey(u.createdAt) === todayKey) newToday++;
+    if (u.lastPlayedDate === todayKey) playedToday++;
+    if (u.lastPlayedDate) {
+      const lastPlayedWeek = weekKey(Date.parse(`${u.lastPlayedDate}T00:00:00Z`));
+      if (lastPlayedWeek === curWeek) playedThisWeek++;
+    }
+    if (isWebGuestId(u.id)) fromWeb++;
+    else fromTelegram++;
+    totalGoalsAllTime += u.totalGoals || 0;
+  }
+
+  const finishedDuels = duels.filter((d) => d.creatorGoals != null && d.opponentGoals != null).length;
+
+  const topActive = [...users]
+    .sort((a, b) => (b.totalGoals || 0) - (a.totalGoals || 0))
+    .slice(0, 5)
+    .map((u) => ({ name: u.firstName || u.username || "Болельщик", totalGoals: u.totalGoals || 0 }));
+
+  return {
+    totalPlayers: users.length,
+    newToday,
+    playedToday,
+    playedThisWeek,
+    fromTelegram,
+    fromWeb,
+    totalGoalsAllTime,
+    totalDuels: duels.length,
+    finishedDuels,
+    topActive,
+  };
+}
+
 module.exports = {
   ENERGY_MAX,
   ENERGY_REGEN_MS,
@@ -550,4 +608,6 @@ module.exports = {
   submitDuelResult,
   buildLeaderboard,
   buildOpponentRoad,
+  isWebGuestId,
+  buildStats,
 };

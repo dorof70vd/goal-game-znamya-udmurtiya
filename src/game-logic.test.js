@@ -468,4 +468,33 @@ check("режим тренировки по умолчанию — атака, �
   assert.strictEqual(mode, "attack");
 });
 
+check("isWebGuestId отличает гостевой веб-id от Telegram-id", () => {
+  assert.strictEqual(logic.isWebGuestId("web_abc123"), true);
+  assert.strictEqual(logic.isWebGuestId("123456789"), false);
+  assert.strictEqual(logic.isWebGuestId(null), false);
+});
+
+check("buildStats считает игроков по источнику входа и активности", () => {
+  const now = Date.now();
+  const todayKey = logic.dateKey(now);
+  const users = [
+    freshUser({ id: "111", firstName: "Телеграмщик", totalGoals: 20, lastPlayedDate: todayKey, createdAt: now }),
+    freshUser({ id: "web_abc", firstName: "Гость", totalGoals: 5, lastPlayedDate: todayKey }),
+    freshUser({ id: "222", firstName: "Старичок", totalGoals: 50, lastPlayedDate: null, createdAt: now - 30 * 86400000 }),
+  ];
+  const duel = logic.createDuel("111", "Телеграмщик", now);
+  logic.startDuelAttempt(duel, "111", "Телеграмщик", now);
+  logic.submitDuelResult(duel, "111", duel.creatorToken, 10, now);
+  const stats = logic.buildStats(users, [duel], now);
+  assert.strictEqual(stats.totalPlayers, 3);
+  assert.strictEqual(stats.fromTelegram, 2);
+  assert.strictEqual(stats.fromWeb, 1);
+  assert.strictEqual(stats.playedToday, 2);
+  assert.strictEqual(stats.newToday, 1);
+  assert.strictEqual(stats.totalGoalsAllTime, 75);
+  assert.strictEqual(stats.totalDuels, 1);
+  assert.strictEqual(stats.finishedDuels, 0); // только одна сторона сыграла
+  assert.strictEqual(stats.topActive[0].name, "Старичок"); // больше всех голов
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);
