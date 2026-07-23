@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Забей гол — Знамя-Удмуртия</title>
+<link rel="icon" type="image/png" href="assets/favicon.png" />
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --club-red: #c1272d;
+    --club-red-dark: #8f1418;
+    --club-white: #ffffff;
+    --ice: #eef3f7;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: linear-gradient(180deg, var(--club-red-dark) 0%, var(--club-red) 45%, var(--ice) 45%, var(--ice) 100%);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #222; overflow: hidden; touch-action: none; user-select: none;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  header {
+    padding: 10px 14px 4px;
+    display: flex; align-items: center; justify-content: space-between;
+    color: white; text-shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+  header .club { display:flex; align-items:center; gap:8px; font-weight:700; font-size: 15px; }
+  .crest { height: 34px; width: auto; display:block; filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+  .stat-row { display:flex; gap: 10px; font-size: 12px; }
+  .stat { background: rgba(0,0,0,.25); border-radius: 10px; padding: 3px 8px; }
+
+  #canvasWrap { position: relative; flex: 1; margin: 6px 10px 4px; border-radius: 16px; overflow: hidden; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+  canvas { display:block; width: 100%; height: 100%; background: #dff0ff; touch-action:none; }
+
+  #overlay {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; text-align:center;
+    background: rgba(20,10,10,.72); color:white; padding: 20px; gap: 12px;
+  }
+  #overlay.hidden { display:none; }
+  #overlay h2 { margin: 0; font-size: 22px; }
+  #overlay p { margin: 0; opacity: .9; font-size: 14px; line-height:1.4; }
+  .btn {
+    border: none; border-radius: 999px; padding: 12px 26px; font-size: 15px; font-weight: 700;
+    background: var(--club-white); color: var(--club-red-dark); cursor:pointer;
+    box-shadow: 0 4px 10px rgba(0,0,0,.25);
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn.secondary { background: transparent; color: white; border: 2px solid rgba(255,255,255,.7); box-shadow:none; }
+
+  footer { padding: 8px 14px 14px; color: #333; font-size: 12px; text-align:center; }
+
+  #powerBarWrap {
+    position:absolute; left: 12px; bottom: 14px; width: 16px; height: 46%;
+    background: rgba(255,255,255,.35); border-radius: 10px; overflow:hidden;
+    border: 2px solid rgba(255,255,255,.6);
+  }
+  #powerBar { position:absolute; bottom:0; left:0; right:0; height:0%; background: linear-gradient(180deg, #ffe27a, var(--club-red)); }
+
+  #hud { position:absolute; top: 8px; right: 10px; color:white; font-size:12px; text-align:right; text-shadow:0 1px 2px rgba(0,0,0,.5); }
+  #streakBadge { position:absolute; top:8px; left:10px; color:white; font-size:12px; text-shadow:0 1px 2px rgba(0,0,0,.5); }
+</style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="club"><img class="crest" src="assets/logo.png" alt="Знамя-Удмуртия" /><span>Забей гол — Знамя-Удмуртия</span></div>
+    </header>
+    <div class="stat-row" style="padding: 0 14px 6px; color:white;">
+      <div class="stat" id="energyStat">⚡ …</div>
+      <div class="stat" id="streakStat">🔥 …</div>
+      <div class="stat" id="levelStat">🏒 …</div>
+    </div>
+
+    <div id="canvasWrap">
+      <canvas id="game"></canvas>
+      <div id="powerBarWrap"><div id="powerBar"></div></div>
+      <div id="hud"></div>
+      <div id="streakBadge"></div>
+
+      <div id="overlay">
+        <h2 id="overlayTitle">Загрузка…</h2>
+        <p id="overlayText">Подключаемся к Telegram…</p>
+        <button class="btn" id="overlayBtn" style="display:none;">Играть</button>
+        <button class="btn secondary" id="overlayBtn2" style="display:none;">Таблица лидеров</button>
+        <button class="btn secondary" id="overlayBtn3" style="display:none;">📰 +2 попытки за новость клуба</button>
+      </div>
+    </div>
+
+    <footer id="footerText">Зажми и веди пальцем, чтобы прицелиться — отпусти, чтобы ударить.</footer>
+  </div>
+
+<script src="game.js"></script>
+</body>
+</html>

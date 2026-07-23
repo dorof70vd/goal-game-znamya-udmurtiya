@@ -1,0 +1,28 @@
+# Render "Blueprint" — если в настройках сервиса указать этот файл
+# (или Render найдёт его сам при подключении репозитория), поля ниже
+# заполнятся автоматически. BOT_TOKEN всё равно нужно будет вписать вручную
+# в разделе Environment (секреты не хранятся в репозитории).
+
+services:
+  - type: web
+    name: goal-game-znamya-udmurtiya
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: CLUB_NAME
+        value: "ХК «Знамя-Удмуртия»"
+      - key: DEV_ALLOW_FAKE_AUTH
+        value: "0"
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
+      - key: NEWS_URL
+        sync: false
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
