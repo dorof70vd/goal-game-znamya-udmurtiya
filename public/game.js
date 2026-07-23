@@ -24,6 +24,37 @@
 
   const initData = getInitData();
 
+  // ------------------------- Гостевой веб-вход (без Telegram) --------------
+  // Если игру открыли просто по ссылке (например, из поста ВКонтакте), у нас
+  // нет Telegram-идентификатора. Заводим анонимный, привязанный к этому
+  // браузеру: он хранится локально и переживает повторные заходы, так что
+  // человек продолжает считаться тем же игроком в турнирной таблице. Это
+  // осознанно более "слабая" identity, чем Telegram (можно почистить кэш и
+  // получить нового "игрока") — честный компромисс ради входа без Telegram.
+  let webIdentity = null;
+  function getOrCreateWebIdentity() {
+    if (webIdentity) return webIdentity;
+    let id = null;
+    let name = null;
+    try {
+      id = localStorage.getItem("goalgame_web_id");
+      name = localStorage.getItem("goalgame_web_name");
+    } catch (_) {
+      /* localStorage может быть недоступен (приватный режим и т.п.) — переживём без сохранения между визитами */
+    }
+    if (!id) {
+      id = "web_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      try { localStorage.setItem("goalgame_web_id", id); } catch (_) {}
+    }
+    if (!name) {
+      const entered = (window.prompt("Как тебя записать в игре и турнирной таблице?", "") || "").trim();
+      name = entered.slice(0, 24) || "Болельщик";
+      try { localStorage.setItem("goalgame_web_name", name); } catch (_) {}
+    }
+    webIdentity = { id, name };
+    return webIdentity;
+  }
+
   const el = {
     overlay: document.getElementById("overlay"),
     overlayTitle: document.getElementById("overlayTitle"),
@@ -62,11 +93,17 @@
   window.addEventListener("resize", resize);
   resize();
 
+  function authFields() {
+    if (initData) return { initData };
+    const identity = getOrCreateWebIdentity();
+    return { webId: identity.id, webName: identity.name };
+  }
+
   async function api(path, body) {
     const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData, ...body }),
+      body: JSON.stringify({ ...authFields(), ...body }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -1063,18 +1100,28 @@
 
   // ------------------------------- Дуэли ---------------------------------
 
+  // Подсказка про то, где узнать результат дуэли/тренировки — в Telegram это
+  // чат бота, а для гостей без Telegram (открыли просто по ссылке) бот
+  // недоступен, поэтому просим просто зайти по той же ссылке позже.
+  function resultNotifyHint() {
+    return tg ? "результат придёт в чат бота" : "загляни по этой же ссылке чуть позже, чтобы увидеть результат";
+  }
+
   async function startDuelChallenge() {
     try {
       const res = await api("/api/duel/create", {});
+      const link = res.shareUrl || res.webUrl;
       const shareText =
         `⚔️ Вызываю тебя на дуэль в «Забей гол» — ХК «Знамя-Удмуртия»! ` +
         `${res.shotsPerDuel} ударов, у обоих одинаковый вратарь — честная игра.`;
-      if (res.shareUrl) {
-        if (tg && tg.openTelegramLink) {
+      if (link) {
+        if (tg && tg.openTelegramLink && res.shareUrl) {
           const url = `https://t.me/share/url?url=${encodeURIComponent(res.shareUrl)}&text=${encodeURIComponent(shareText)}`;
           tg.openTelegramLink(url);
+        } else if (navigator.share) {
+          navigator.share({ text: shareText, url: link }).catch(() => {});
         } else {
-          window.prompt("Скопируй и отправь другу:", `${shareText}\n${res.shareUrl}`);
+          window.prompt("Скопируй и отправь другу:", `${shareText}\n${link}`);
         }
       }
       showOverlay({
@@ -1110,7 +1157,7 @@
       const code = err.payload && err.payload.error;
       const text =
         code === "ALREADY_PLAYED"
-          ? "Ты уже сыграл свою попытку в этой дуэли — жди результата, он придёт в чат бота, как только сыграет соперник."
+          ? `Ты уже сыграл свою попытку в этой дуэли — жди результата, ${resultNotifyHint()}, как только сыграет соперник.`
           : code === "DUEL_FULL"
           ? "В этой дуэли уже играют два других болельщика."
           : "Не получилось начать дуэль, попробуй ещё раз.";
@@ -1135,7 +1182,7 @@
         text = `${res.creatorName}: ${res.creatorGoals} — ${res.opponentName}: ${res.opponentGoals}`;
       } else {
         title = "Попытка засчитана!";
-        text = `Ты выбил ${successCount} из ${match.shotsPerMatch}. Ждём, пока сыграет соперник — результат придёт в чат бота.`;
+        text = `Ты выбил ${successCount} из ${match.shotsPerMatch}. Ждём, пока сыграет соперник — ${resultNotifyHint()}.`;
       }
       if (res.finished) {
         showOverlay({
@@ -1170,7 +1217,7 @@
       if (info.alreadyPlayed) {
         const text = info.finished
           ? `${info.creatorName}: ${info.creatorGoals} — ${info.opponentName}: ${info.opponentGoals}`
-          : "Ты уже сыграл свою попытку — ждём соперника, результат придёт в чат бота.";
+          : `Ты уже сыграл свою попытку — ждём соперника, ${resultNotifyHint()}.`;
         showOverlay({
           title: info.finished ? "⚔️ Дуэль завершена" : "⚔️ Дуэль",
           text,
@@ -1376,13 +1423,7 @@
     // Заранее подгружаем герб клуба — нужен и для праздничного эффекта на
     // канвасе, и для карточки результата (см. loadLogoImage() ниже).
     loadLogoImage().then((img) => { logoImg = img; });
-    if (!initData) {
-      showOverlay({
-        title: "Открой через Telegram",
-        text: "Эта игра работает как мини-приложение внутри Telegram. Открой её по кнопке у бота клуба.",
-      });
-      return;
-    }
+    showOverlay({ title: "Секунду…", text: "Загружаем игру…" });
     try {
       const state = await api("/api/auth", {});
       currentUser = state;
@@ -1400,7 +1441,10 @@
         renderHome();
       }
     } catch (err) {
-      showOverlay({ title: "Не удалось подключиться", text: "Попробуй перезайти в игру через кнопку бота.", });
+      const reconnectHint = tg
+        ? "Попробуй перезайти в игру через кнопку бота."
+        : "Попробуй перезагрузить страницу.";
+      showOverlay({ title: "Не удалось подключиться", text: reconnectHint });
     }
   }
 

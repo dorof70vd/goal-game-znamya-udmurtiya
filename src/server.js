@@ -33,14 +33,35 @@ const app = express();
 app.use(express.json({ limit: "5mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 
+// Формат клиентского веб-идентификатора для гостевого входа (см. ниже).
+const WEB_GUEST_ID_RE = /^web_[a-z0-9]{6,40}$/;
+
 function authOrFail(req, res) {
   const initData = req.body?.initData || req.query?.initData;
-  const check = verifyInitDataOrDev(initData, BOT_TOKEN);
-  if (!check.ok) {
-    res.status(401).json({ error: "AUTH_FAILED", reason: check.reason });
-    return null;
+  if (initData) {
+    const check = verifyInitDataOrDev(initData, BOT_TOKEN);
+    if (!check.ok) {
+      res.status(401).json({ error: "AUTH_FAILED", reason: check.reason });
+      return null;
+    }
+    return check.user;
   }
-  return check.user;
+
+  // Гостевой веб-вход: для тех, кто открыл игру просто по ссылке, а не через
+  // Telegram (например, из поста ВКонтакте) — без Telegram нет способа
+  // криптографически проверить личность, поэтому доверяем клиенту случайный
+  // идентификатор, который он сам сгенерировал и хранит у себя в браузере.
+  // Это осознанный компромисс ради охвата аудитории без Telegram/VPN — см.
+  // раздел "Честные ограничения" в README.
+  const webId = req.body?.webId || req.query?.webId;
+  if (typeof webId === "string" && WEB_GUEST_ID_RE.test(webId)) {
+    const rawName = req.body?.webName || req.query?.webName;
+    const safeName = (typeof rawName === "string" ? rawName : "").replace(/[\r\n\t]/g, " ").trim().slice(0, 24) || "Болельщик";
+    return { id: webId, first_name: safeName, username: null };
+  }
+
+  res.status(401).json({ error: "AUTH_FAILED", reason: "NO_AUTH" });
+  return null;
 }
 
 function serializeUser(user, now) {
@@ -214,9 +235,13 @@ app.post("/api/duel/create", (req, res) => {
   const duel = logic.createDuel(tgUser.id, name, now);
   db.saveDuel(duel);
   const shareUrl = botUsername ? `https://t.me/${botUsername}?start=duel_${duel.id}` : null;
+  // Обычная веб-ссылка на дуэль — работает для кого угодно (не только для
+  // Telegram-бота), в том числе для гостей, зашедших просто по ссылке из VK.
+  const webUrl = PUBLIC_URL ? `${PUBLIC_URL}/?duel=${duel.id}` : null;
   res.json({
     duelId: duel.id,
     shareUrl,
+    webUrl,
     shotsPerDuel: duel.shotsPerDuel,
     difficulty: logic.getDuelDifficulty(),
   });
