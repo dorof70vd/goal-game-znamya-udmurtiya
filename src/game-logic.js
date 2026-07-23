@@ -338,6 +338,37 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
   };
 }
 
+// ------------------------- Тренировка (свободный выбор режима) -------------
+//
+// В обычной игре режим (атака/защита) чередуется по уровню автоматически —
+// это остаётся неизменным. Тренировка — отдельная, независимая песочница:
+// игрок сам выбирает, что отрабатывать, играет на сложности своего текущего
+// уровня, но результат НИКАК не влияет на уровень, энергию, статистику или
+// достижения. Поэтому: не тратит энергию, не ограничена по числу попыток,
+// не пишется в totalGoals/weekGoals/лидерборд, не выдаёт значки.
+
+function startTrainingMatch(user, mode, now = Date.now()) {
+  const normalizedMode = mode === "defense" ? "defense" : "attack";
+  const token = `training.${user.id}.${now}.${Math.random().toString(36).slice(2, 10)}`;
+  user.activeTraining = { token, createdAt: now, mode: normalizedMode, level: user.level };
+  return { token, mode: normalizedMode, difficulty: getKeeperDifficulty(user.level) };
+}
+
+function submitTrainingResult(user, token, goals, now = Date.now()) {
+  const training = user.activeTraining;
+  if (!training || training.token !== token) {
+    throw new Error("INVALID_TRAINING_TOKEN");
+  }
+  if (now - training.createdAt > MATCH_TOKEN_TTL_MS) {
+    user.activeTraining = null;
+    throw new Error("TRAINING_EXPIRED");
+  }
+  const safeGoals = Math.max(0, Math.min(SHOTS_PER_MATCH, Math.round(goals)));
+  const perfect = safeGoals === SHOTS_PER_MATCH;
+  user.activeTraining = null;
+  return { goals: safeGoals, perfect, mode: training.mode };
+}
+
 // ------------------------- Дуэли (вызов друга по ссылке) -------------------
 //
 // Асинхронный формат: один игрок создаёт дуэль и играет свою попытку, когда
@@ -510,6 +541,8 @@ module.exports = {
   canStartMatch,
   startMatch,
   submitMatchResult,
+  startTrainingMatch,
+  submitTrainingResult,
   getDuelDifficulty,
   createDuel,
   roleForUser,

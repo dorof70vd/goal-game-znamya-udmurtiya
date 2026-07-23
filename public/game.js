@@ -34,7 +34,9 @@
     overlayBtn4: document.getElementById("overlayBtn4"),
     overlayBtn5: document.getElementById("overlayBtn5"),
     overlayBtn6: document.getElementById("overlayBtn6"),
+    overlayBtn7: document.getElementById("overlayBtn7"),
     overlayList: document.getElementById("overlayList"),
+    rulesBtn: document.getElementById("rulesBtn"),
     energyStat: document.getElementById("energyStat"),
     streakStat: document.getElementById("streakStat"),
     diffStat: document.getElementById("diffStat"),
@@ -230,6 +232,7 @@
   let currentUser = null;
   let match = null; // { token, difficulty, shotsPerMatch, mode, opponentName }
   let duelContext = null; // { duelId, token, role } — заполняется, когда играем дуэль, а не обычный матч
+  let trainingContext = null; // { mode, token } — заполняется во время тренировки (не влияет на прогресс)
   let currentMode = "attack"; // 'attack' | 'defense' — второй режим "Вратарь"
   let shotIndex = 0;
   let successCount = 0;
@@ -593,6 +596,8 @@
     startKeeperDive(slot, match.difficulty);
   }
 
+  el.rulesBtn.addEventListener("click", showRules);
+
   // ------------------------- Управление (pointer) -------------------------
 
   canvas.addEventListener("pointerdown", (e) => {
@@ -628,8 +633,8 @@
   // ------------------------------- Матч flow -------------------------------
 
   function showOverlay({
-    title, text, btnLabel, btn2Label, btn3Label, btn4Label, btn5Label, btn6Label,
-    onBtn, onBtn2, onBtn3, onBtn4, onBtn5, onBtn6, renderList,
+    title, text, btnLabel, btn2Label, btn3Label, btn4Label, btn5Label, btn6Label, btn7Label,
+    onBtn, onBtn2, onBtn3, onBtn4, onBtn5, onBtn6, onBtn7, renderList,
   }) {
     el.overlay.classList.remove("hidden");
     el.overlayTitle.textContent = title;
@@ -659,6 +664,9 @@
     el.overlayBtn6.style.display = btn6Label ? "inline-block" : "none";
     el.overlayBtn6.textContent = btn6Label || "";
     el.overlayBtn6.onclick = onBtn6 || null;
+    el.overlayBtn7.style.display = btn7Label ? "inline-block" : "none";
+    el.overlayBtn7.textContent = btn7Label || "";
+    el.overlayBtn7.onclick = onBtn7 || null;
   }
   function hideOverlay() { el.overlay.classList.add("hidden"); }
 
@@ -727,6 +735,28 @@
       status.textContent = r.status === "done" ? "✅" : r.status === "current" ? "▶️" : "⏳";
       row.append(badge, name, status);
       container.appendChild(row);
+    });
+  }
+
+  function showRules() {
+    const text =
+      "Как играть: зажми экран и веди пальцем, чтобы прицелиться — отпусти, чтобы ударить (режим «Забей гол»). " +
+      "В защите просто тапни по воротам туда, куда, как думаешь, полетит мяч.\n\n" +
+      "Атака и защита чередуются по уровню: нечётный уровень — атака, чётный — защита. Смена режима автоматическая " +
+      "и привязана к уровню, на котором ты сейчас, — выбрать вручную для обычного матча нельзя.\n\n" +
+      "Матч = 5 попыток. Выбил или отразил все 5 — идеальный матч: уровень растёт на 1, а вместе с ним меняется и режим следующего матча.\n\n" +
+      "🎯 Тренировка — отдельный режим, где можно самому выбрать атаку или защиту, не дожидаясь нужного уровня. " +
+      "Не тратит энергию и не влияет на уровень, статистику или значки — просто разминка.\n\n" +
+      "⚔️ Дуэль с другом — по 20 ударов у обоих, сложность одинаковая (фиксированная) для честной игры, независимо от уровня каждого. " +
+      "Играете асинхронно по очереди — результат узнаёте оба, как только сыграют оба.\n\n" +
+      "Энергия — 8 попыток на матчи, дальше восстанавливается по 1 в час. Бонусы за новость клуба, VK и MAX дают +2 попытки " +
+      "сверх максимума каждый день, и они не мешают друг другу.\n\n" +
+      "Достижения выдаются автоматически за голы, серии ударов, идеальные матчи и стрик визитов — посмотреть свою коллекцию можно кнопкой «🏅 Достижения».";
+    showOverlay({
+      title: "❓ Правила игры",
+      text,
+      btnLabel: "Понятно",
+      onBtn: () => { if (currentUser) renderHome(); else hideOverlay(); },
     });
   }
 
@@ -850,6 +880,8 @@
         onBtn5: startDuelChallenge,
         btn6Label: "🗺️ Карта соперников",
         onBtn6: showOpponentMap,
+        btn7Label: "🎯 Тренировка",
+        onBtn7: showTrainingMenu,
       });
       return;
     }
@@ -870,7 +902,48 @@
       onBtn5: startDuelChallenge,
       btn6Label: "🗺️ Карта соперников",
       onBtn6: showOpponentMap,
+      btn7Label: "🎯 Тренировка",
+      onBtn7: showTrainingMenu,
     });
+  }
+
+  function showTrainingMenu() {
+    showOverlay({
+      title: "🎯 Тренировка",
+      text:
+        "Здесь можно самому выбрать, что отрабатывать — атаку или защиту, без ожидания подходящего уровня. " +
+        "Тренировка не тратит энергию и никак не влияет на твой уровень, статистику и достижения — просто разминка.",
+      btnLabel: "⚽ Тренировать атаку",
+      onBtn: () => startTrainingFlow("attack"),
+      btn2Label: "🧤 Тренировать защиту",
+      onBtn2: () => startTrainingFlow("defense"),
+      btn3Label: "Назад",
+      onBtn3: renderHome,
+    });
+  }
+
+  async function startTrainingFlow(mode) {
+    try {
+      const res = await api("/api/training/start", { mode });
+      trainingContext = { mode: res.mode, token: res.token };
+      match = { token: res.token, shotsPerMatch: res.shotsPerMatch, difficulty: res.difficulty, mode: res.mode };
+      currentMode = res.mode;
+      shotIndex = 0;
+      successCount = 0;
+      keeperX = 0.5;
+      keeperDive = null;
+      playerDiveSlot = null;
+      ball = null;
+      hideOverlay();
+      const modeLabel = res.mode === "defense" ? "защита" : "атака";
+      if (currentMode === "defense") {
+        startDefenseRound();
+      } else {
+        el.footer.textContent = `🎯 Тренировка (${modeLabel}) — удар 1 из ${match.shotsPerMatch}: зажми и веди пальцем, отпусти для удара.`;
+      }
+    } catch (err) {
+      showOverlay({ title: "Не получилось", text: "Не удалось начать тренировку, попробуй ещё раз.", btnLabel: "Ок", onBtn: renderHome });
+    }
   }
 
   async function startMatchFlow() {
@@ -905,6 +978,9 @@
   async function finishMatch() {
     if (duelContext) {
       return finishDuelMatch();
+    }
+    if (trainingContext) {
+      return finishTraining();
     }
     const playedMode = currentMode;
     lastPlayedMode = playedMode;
@@ -952,6 +1028,35 @@
     } catch (err) {
       showOverlay({ title: "Ошибка", text: "Не удалось сохранить результат матча.", btnLabel: "Ок", onBtn: renderHome });
     } finally {
+      match = null;
+    }
+  }
+
+  // ------------------------------- Тренировка -----------------------------
+
+  async function finishTraining() {
+    const tc = trainingContext;
+    const isDefense = tc.mode === "defense";
+    try {
+      const res = await api("/api/training/result", { token: tc.token, goals: successCount });
+      const verbPast = isDefense ? "Отражено" : "Забито";
+      const title = res.perfect
+        ? "🎯 Отличная тренировка!"
+        : `🎯 Тренировка: ${verbPast} ${successCount} из ${match.shotsPerMatch}`;
+      showOverlay({
+        title,
+        text: "Тренировка не считается в статистику и не тратит энергию — можно повторить сразу же.",
+        btnLabel: isDefense ? "🧤 Ещё раз (защита)" : "⚽ Ещё раз (атака)",
+        onBtn: () => startTrainingFlow(tc.mode),
+        btn2Label: isDefense ? "⚽ Тренировать атаку" : "🧤 Тренировать защиту",
+        onBtn2: () => startTrainingFlow(isDefense ? "attack" : "defense"),
+        btn3Label: "На главный экран",
+        onBtn3: renderHome,
+      });
+    } catch (err) {
+      showOverlay({ title: "Ошибка", text: "Не удалось сохранить тренировку.", btnLabel: "Ок", onBtn: renderHome });
+    } finally {
+      trainingContext = null;
       match = null;
     }
   }

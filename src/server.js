@@ -177,6 +177,33 @@ app.post("/api/match/result", (req, res) => {
   }
 });
 
+// --- Тренировка (свободный выбор атаки/защиты, без влияния на прогресс) ----
+
+app.post("/api/training/start", (req, res) => {
+  const tgUser = authOrFail(req, res);
+  if (!tgUser) return;
+  const { mode } = req.body || {};
+  const user = db.getOrCreateUser(tgUser.id, {});
+  const result = logic.startTrainingMatch(user, mode);
+  db.saveUser(user);
+  res.json({ ...result, shotsPerMatch: logic.SHOTS_PER_MATCH });
+});
+
+app.post("/api/training/result", (req, res) => {
+  const tgUser = authOrFail(req, res);
+  if (!tgUser) return;
+  const { token, goals } = req.body || {};
+  const user = db.getOrCreateUser(tgUser.id, {});
+  try {
+    const result = logic.submitTrainingResult(user, token, Number(goals));
+    db.saveUser(user);
+    res.json(result);
+  } catch (err) {
+    db.saveUser(user);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // --- Дуэли (вызов друга по ссылке) --------------------------------------
 
 app.post("/api/duel/create", (req, res) => {

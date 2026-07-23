@@ -442,4 +442,30 @@ check("дорожка соперников не выходит за начало
   assert.strictEqual(roadEnd[roadEnd.length - 1].level, logic.MAX_LEVEL);
 });
 
+check("тренировка не тратит энергию, не меняет уровень и не пишется в статистику", () => {
+  const user = freshUser({ energy: 0, maxEnergy: 8, level: 3, totalGoals: 10, weekGoals: 10 });
+  const { token, mode } = logic.startTrainingMatch(user, "defense");
+  assert.strictEqual(mode, "defense");
+  const result = logic.submitTrainingResult(user, token, 5);
+  assert.strictEqual(result.perfect, true);
+  assert.strictEqual(result.mode, "defense");
+  // Энергия, уровень и голы не должны были измениться от тренировки.
+  assert.strictEqual(user.energy, 0);
+  assert.strictEqual(user.level, 3);
+  assert.strictEqual(user.totalGoals, 10);
+  assert.strictEqual(user.weekGoals, 10);
+});
+
+check("тренировку нельзя завершить неверным токеном", () => {
+  const user = freshUser({ level: 1 });
+  logic.startTrainingMatch(user, "attack");
+  assert.throws(() => logic.submitTrainingResult(user, "чужой-токен", 5), /INVALID_TRAINING_TOKEN/);
+});
+
+check("режим тренировки по умолчанию — атака, если передали что-то незнакомое", () => {
+  const user = freshUser({ level: 1 });
+  const { mode } = logic.startTrainingMatch(user, "что-то странное");
+  assert.strictEqual(mode, "attack");
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);
