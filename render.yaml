@@ -24,5 +24,9 @@ services:
         sync: false
       - key: NEWS_URL
         sync: false
+      - key: VK_URL
+        sync: false
+      - key: MAX_URL
+        sync: false
       - key: DATA_DIR
         value: /opt/render/project/src/data

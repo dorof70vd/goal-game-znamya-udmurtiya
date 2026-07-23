@@ -187,24 +187,48 @@ function registerDailyLogin(user, now = Date.now()) {
 }
 
 /**
- * Бонус за прочтение новости клуба: +NEWS_BONUS_ENERGY энергии, один раз в день,
+ * Общий механизм "бонус за переход по ссылке клуба" (новость, VK, MAX — что
+ * угодно): +NEWS_BONUS_ENERGY энергии, один раз в день на конкретное поле,
  * может превысить обычный максимум (но не бесконечно — есть отдельный потолок).
+ * Разные площадки хранят свою дату отдельным полем на user, поэтому бонусы
+ * независимы друг от друга — можно забрать за новость, VK и MAX в один день.
  * Возвращает { granted, added, energy }.
  */
-function claimNewsBonus(user, now = Date.now()) {
+function claimSocialBonusByField(user, field, now = Date.now()) {
   const todayKey = dateKey(now);
-  if (user.lastNewsBonusDate === todayKey) {
+  if (user[field] === todayKey) {
     return { granted: false, added: 0, energy: user.energy };
   }
   const ceiling = user.maxEnergy + NEWS_BONUS_CEILING_EXTRA;
   const before = user.energy;
   user.energy = Math.min(ceiling, user.energy + NEWS_BONUS_ENERGY);
-  user.lastNewsBonusDate = todayKey;
+  user[field] = todayKey;
   return { granted: true, added: user.energy - before, energy: user.energy };
 }
 
+function isSocialBonusFieldAvailable(user, field, now = Date.now()) {
+  return user[field] !== dateKey(now);
+}
+
+function claimNewsBonus(user, now = Date.now()) {
+  return claimSocialBonusByField(user, "lastNewsBonusDate", now);
+}
 function isNewsBonusAvailable(user, now = Date.now()) {
-  return user.lastNewsBonusDate !== dateKey(now);
+  return isSocialBonusFieldAvailable(user, "lastNewsBonusDate", now);
+}
+
+function claimVkBonus(user, now = Date.now()) {
+  return claimSocialBonusByField(user, "lastVkBonusDate", now);
+}
+function isVkBonusAvailable(user, now = Date.now()) {
+  return isSocialBonusFieldAvailable(user, "lastVkBonusDate", now);
+}
+
+function claimMaxBonus(user, now = Date.now()) {
+  return claimSocialBonusByField(user, "lastMaxBonusDate", now);
+}
+function isMaxBonusAvailable(user, now = Date.now()) {
+  return isSocialBonusFieldAvailable(user, "lastMaxBonusDate", now);
 }
 
 /** Активен ли сегодня безлимитный режим (день настоящего матча клуба). */
@@ -452,6 +476,10 @@ module.exports = {
   registerDailyLogin,
   claimNewsBonus,
   isNewsBonusAvailable,
+  claimVkBonus,
+  isVkBonusAvailable,
+  claimMaxBonus,
+  isMaxBonusAvailable,
   isMatchDayActive,
   ensureCurrentWeek,
   getKeeperDifficulty,

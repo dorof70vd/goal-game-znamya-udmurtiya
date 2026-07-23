@@ -206,6 +206,31 @@ check("бонус за новость снова доступен на след�
   assert.strictEqual(logic.isNewsBonusAvailable(u, day2), true);
 });
 
+check("бонусы за VK и MAX работают независимо друг от друга и от новости", () => {
+  const now = Date.now();
+  const u = freshUser({ energy: 5, maxEnergy: 8 });
+  const vkRes = logic.claimVkBonus(u, now);
+  assert.strictEqual(vkRes.granted, true);
+  assert.strictEqual(u.energy, 7);
+  // новость и MAX всё ещё доступны — забор VK их не трогает
+  assert.strictEqual(logic.isNewsBonusAvailable(u, now), true);
+  assert.strictEqual(logic.isMaxBonusAvailable(u, now), true);
+  assert.strictEqual(logic.isVkBonusAvailable(u, now), false);
+
+  const maxRes = logic.claimMaxBonus(u, now);
+  assert.strictEqual(maxRes.granted, true);
+  assert.strictEqual(u.energy, 9); // 7 + 2, потолок 8+2=10
+
+  const newsRes = logic.claimNewsBonus(u, now);
+  assert.strictEqual(newsRes.granted, true);
+  assert.strictEqual(u.energy, 10); // упёрлись в потолок 8+2
+
+  // повторно в тот же день — уже нельзя ни один из трёх
+  assert.strictEqual(logic.claimVkBonus(u, now).granted, false);
+  assert.strictEqual(logic.claimMaxBonus(u, now).granted, false);
+  assert.strictEqual(logic.claimNewsBonus(u, now).granted, false);
+});
+
 check("безлимитный день позволяет играть без энергии и не тратит её", () => {
   const now = Date.now();
   const u = freshUser({ energy: 0 });

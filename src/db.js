@@ -75,6 +75,8 @@ function getOrCreateUser(telegramId, profile = {}) {
       streak: 0,
       lastPlayedDate: null, // "YYYY-MM-DD" в таймзоне клуба
       lastNewsBonusDate: null, // "YYYY-MM-DD" — когда последний раз забирали бонус за новость
+      lastVkBonusDate: null, // то же самое для бонуса за подписку на VK
+      lastMaxBonusDate: null, // то же самое для бонуса за подписку на MAX
       level: 1,
       bestScore: 0,
       totalGoals: 0,

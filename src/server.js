@@ -12,6 +12,8 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/+$/, ""); // без завершающего "/"
 const CLUB_NAME = process.env.CLUB_NAME || 'ХК «Знамя-Удмуртия»';
 const NEWS_URL = process.env.NEWS_URL || ""; // куда вести за бонусной попыткой (канал/сайт клуба)
+const VK_URL = process.env.VK_URL || ""; // ссылка на сообщество клуба ВКонтакте (для бонуса за подписку)
+const MAX_URL = process.env.MAX_URL || ""; // ссылка на канал клуба в MAX (для бонуса за подписку)
 // Telegram-ID администратора(ов), которым можно включать безлимит в дни матчей.
 // Через запятую, если их несколько. Свой ID можно узнать командой /myid у бота.
 const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_ID || "")
@@ -27,7 +29,8 @@ if (!BOT_TOKEN) {
 }
 
 const app = express();
-app.use(express.json());
+// Увеличенный лимит нужен для загрузки картинки-карточки результата (см. /api/share-card).
+app.use(express.json({ limit: "5mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 function authOrFail(req, res) {
@@ -64,6 +67,11 @@ function serializeUser(user, now) {
     matchDayActive,
     newsBonusAvailable: Boolean(NEWS_URL) && logic.isNewsBonusAvailable(user, now),
     newsUrl: NEWS_URL || null,
+    vkBonusAvailable: Boolean(VK_URL) && logic.isVkBonusAvailable(user, now),
+    vkUrl: VK_URL || null,
+    maxBonusAvailable: Boolean(MAX_URL) && logic.isMaxBonusAvailable(user, now),
+    maxUrl: MAX_URL || null,
+    botUrl: botUsername ? `https://t.me/${botUsername}` : null,
   };
 }
 
@@ -128,19 +136,27 @@ app.post("/api/match/start", (req, res) => {
   });
 });
 
-app.post("/api/bonus/news", (req, res) => {
-  const tgUser = authOrFail(req, res);
-  if (!tgUser) return;
-  if (!NEWS_URL) {
-    return res.status(400).json({ error: "NEWS_BONUS_NOT_CONFIGURED" });
-  }
-  const now = Date.now();
-  const user = db.getOrCreateUser(tgUser.id, {});
-  logic.applyEnergyRegen(user, now);
-  const bonus = logic.claimNewsBonus(user, now);
-  db.saveUser(user);
-  res.json({ ...bonus, ...serializeUser(user, now) });
-});
+// Общий обработчик для бонусов "перейди по ссылке клуба" (новость/VK/MAX) —
+// сама механика одна и та же, отличается только ссылка и функция из game-logic.
+function makeBonusRoute(urlValue, claimFn) {
+  return (req, res) => {
+    const tgUser = authOrFail(req, res);
+    if (!tgUser) return;
+    if (!urlValue) {
+      return res.status(400).json({ error: "BONUS_NOT_CONFIGURED" });
+    }
+    const now = Date.now();
+    const user = db.getOrCreateUser(tgUser.id, {});
+    logic.applyEnergyRegen(user, now);
+    const bonus = claimFn(user, now);
+    db.saveUser(user);
+    res.json({ ...bonus, ...serializeUser(user, now) });
+  };
+}
+
+app.post("/api/bonus/news", makeBonusRoute(NEWS_URL, logic.claimNewsBonus));
+app.post("/api/bonus/vk", makeBonusRoute(VK_URL, logic.claimVkBonus));
+app.post("/api/bonus/max", makeBonusRoute(MAX_URL, logic.claimMaxBonus));
 
 app.post("/api/match/result", (req, res) => {
   const tgUser = authOrFail(req, res);
@@ -265,6 +281,64 @@ app.post("/api/duel/result", async (req, res) => {
     creatorGoals: duel.creatorGoals,
     opponentGoals: duel.opponentGoals,
   });
+});
+
+// --- Карточка результата для шеринга ------------------------------------
+//
+// Игрок рисует картинку сам на canvas (клиент), сюда только загружает готовые
+// PNG-байты, чтобы получить публичную HTTPS-ссылку — она нужна, например, для
+// tg.shareToStory (Telegram требует настоящий URL, не data:-строку) или чтобы
+// просто открыть/переслать картинку. Храним в памяти (не на диске) — это
+// одноразовые, недолговечные картинки, а не данные игроков, поэтому их не
+// жалко терять при перезапуске сервиса.
+
+const SHARE_CARD_MAX_BYTES = 2 * 1024 * 1024; // 2 МБ с запасом
+const SHARE_CARD_TTL_MS = 2 * 60 * 60 * 1000; // 2 часа хватает, чтобы переслать
+const SHARE_CARD_MAX_COUNT = 300; // защита от разрастания памяти на бесплатном тарифе
+const shareCards = new Map(); // id -> { buffer, mime, createdAt }
+
+function cleanupShareCards() {
+  const now = Date.now();
+  for (const [id, card] of shareCards) {
+    if (now - card.createdAt > SHARE_CARD_TTL_MS) {
+      shareCards.delete(id);
+    }
+  }
+  while (shareCards.size > SHARE_CARD_MAX_COUNT) {
+    const oldestId = shareCards.keys().next().value;
+    shareCards.delete(oldestId);
+  }
+}
+
+app.post("/api/share-card", (req, res) => {
+  const tgUser = authOrFail(req, res);
+  if (!tgUser) return;
+  const { imageBase64 } = req.body || {};
+  const match = typeof imageBase64 === "string" && imageBase64.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/);
+  if (!match) {
+    return res.status(400).json({ error: "BAD_IMAGE" });
+  }
+  const mime = match[1];
+  const buffer = Buffer.from(match[2], "base64");
+  if (buffer.length === 0 || buffer.length > SHARE_CARD_MAX_BYTES) {
+    return res.status(400).json({ error: "IMAGE_TOO_LARGE" });
+  }
+  cleanupShareCards();
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  shareCards.set(id, { buffer, mime, createdAt: Date.now() });
+  const ext = mime === "image/png" ? "png" : "jpg";
+  const path = `/card/${id}.${ext}`;
+  res.json({ url: PUBLIC_URL ? `${PUBLIC_URL}${path}` : path });
+});
+
+app.get("/card/:id.:ext", (req, res) => {
+  const card = shareCards.get(req.params.id);
+  if (!card) {
+    return res.status(404).send("Карточка не найдена или устарела.");
+  }
+  res.set("Content-Type", card.mime);
+  res.set("Cache-Control", "no-store");
+  res.send(card.buffer);
 });
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));

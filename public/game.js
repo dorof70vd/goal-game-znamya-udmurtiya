@@ -554,25 +554,62 @@
     });
   }
 
-  async function claimNewsBonus() {
+  const SOCIAL_BONUS_KINDS = [
+    { kind: "news", label: "📰 Новость клуба" },
+    { kind: "vk", label: "🔵 ВКонтакте клуба" },
+    { kind: "max", label: "🟠 MAX клуба" },
+  ];
+
+  async function claimSocialBonus(kind) {
     try {
-      const res = await api("/api/bonus/news", {});
+      const res = await api(`/api/bonus/${kind}`, {});
       currentUser = res;
       updateHudFromState(currentUser);
-      if (currentUser.newsUrl && tg && tg.openLink) {
-        tg.openLink(currentUser.newsUrl);
-      } else if (currentUser.newsUrl) {
-        window.open(currentUser.newsUrl, "_blank");
+      const url = currentUser[`${kind}Url`];
+      if (url && tg && tg.openLink) {
+        tg.openLink(url);
+      } else if (url) {
+        window.open(url, "_blank");
       }
-      renderHome();
     } catch (err) {
-      renderHome();
+      /* если бонус не настроен или уже забран — просто останемся на этом экране */
     }
+    showBonuses();
+  }
+
+  function hasAnySocialLink() {
+    return SOCIAL_BONUS_KINDS.some((k) => currentUser && currentUser[`${k.kind}Url`]);
+  }
+
+  function showBonuses() {
+    if (!currentUser) return;
+    const configured = SOCIAL_BONUS_KINDS.filter((k) => currentUser[`${k.kind}Url`]);
+    if (!configured.length) {
+      showOverlay({ title: "🎁 Бонусы", text: "Пока не настроено ни одной ссылки.", btnLabel: "Назад", onBtn: renderHome });
+      return;
+    }
+    const lines = configured
+      .map((k) => `${currentUser[`${k.kind}BonusAvailable`] ? "🟢" : "⚪️"} ${k.label} — ${currentUser[`${k.kind}BonusAvailable`] ? "доступно, +2 попытки" : "уже забрано сегодня"}`)
+      .join("\n");
+    const claimable = configured.filter((k) => currentUser[`${k.kind}BonusAvailable`]);
+    showOverlay({
+      title: "🎁 Бонусы за подписки",
+      text: `Переходи по ссылкам клуба — за первый переход в день даём +2 попытки сверх обычного максимума.\n\n${lines}`,
+      btnLabel: claimable[0] ? claimable[0].label : undefined,
+      onBtn: claimable[0] ? () => claimSocialBonus(claimable[0].kind) : undefined,
+      btn2Label: claimable[1] ? claimable[1].label : undefined,
+      onBtn2: claimable[1] ? () => claimSocialBonus(claimable[1].kind) : undefined,
+      btn3Label: claimable[2] ? claimable[2].label : undefined,
+      onBtn3: claimable[2] ? () => claimSocialBonus(claimable[2].kind) : undefined,
+      btn4Label: "Назад",
+      onBtn4: renderHome,
+    });
   }
 
   function renderHome() {
     if (!currentUser) return;
-    const newsBtn = currentUser.newsBonusAvailable ? "📰 +2 попытки за новость клуба" : null;
+    const anyBonusAvailable = SOCIAL_BONUS_KINDS.some((k) => currentUser[`${k.kind}BonusAvailable`]);
+    const bonusBtn = hasAnySocialLink() ? (anyBonusAvailable ? "🎁 Бонусы (есть!)" : "🎁 Бонусы") : null;
     const isDefense = currentUser.mode === "defense";
     const modeIcon = isDefense ? "🧤" : "⚽";
     const opponent = currentUser.opponentName || `Соперник №${currentUser.level}`;
@@ -587,11 +624,11 @@
       showOverlay({
         title: "Энергия закончилась",
         text: `Следующая попытка через ${fmtMs(currentUser.msUntilNextEnergy)}. Заходи завтра — получишь бонус за стрик!` +
-          (newsBtn ? " А пока можно почитать новость клуба и получить ещё попытки." : ""),
+          (anyBonusAvailable ? " А пока можно забрать бонусы за подписки клуба." : ""),
         btn2Label: "Таблица лидеров",
         onBtn2: showLeaderboard,
-        btn3Label: newsBtn,
-        onBtn3: claimNewsBonus,
+        btn3Label: bonusBtn,
+        onBtn3: showBonuses,
         btn4Label: "🏅 Достижения",
         onBtn4: showAchievements,
         btn5Label: "⚔️ Вызвать на дуэль",
@@ -608,8 +645,8 @@
       btn2Label: "Таблица лидеров",
       onBtn: startMatchFlow,
       onBtn2: showLeaderboard,
-      btn3Label: newsBtn,
-      onBtn3: claimNewsBonus,
+      btn3Label: bonusBtn,
+      onBtn3: showBonuses,
       btn4Label: "🏅 Достижения",
       onBtn4: showAchievements,
       btn5Label: "⚔️ Вызвать на дуэль",
@@ -770,7 +807,18 @@
         title = "Попытка засчитана!";
         text = `Ты выбил ${successCount} из ${match.shotsPerMatch}. Ждём, пока сыграет соперник — результат придёт в чат бота.`;
       }
-      showOverlay({ title, text, btnLabel: "На главный экран", onBtn: renderHome });
+      if (res.finished) {
+        showOverlay({
+          title,
+          text,
+          btnLabel: "На главный экран",
+          onBtn: renderHome,
+          btn2Label: "Поделиться результатом",
+          onBtn2: () => shareDuelResult(res),
+        });
+      } else {
+        showOverlay({ title, text, btnLabel: "На главный экран", onBtn: renderHome });
+      }
     } catch (err) {
       showOverlay({ title: "Ошибка", text: "Не удалось сохранить результат дуэли.", btnLabel: "Ок", onBtn: renderHome });
     } finally {
@@ -814,16 +862,177 @@
     }
   }
 
-  function shareResult() {
+  // ------------------------- Карточка результата для шеринга ---------------
+
+  let logoImagePromise = null;
+  function loadLogoImage() {
+    if (!logoImagePromise) {
+      logoImagePromise = new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = "assets/logo.png";
+      });
+    }
+    return logoImagePromise;
+  }
+
+  /** Путь скруглённого прямоугольника — без опоры на ctx.roundRect (не везде поддержан). */
+  function roundedRectPath(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  async function buildShareCardBlob({ scoreLine, subtitle, footer }) {
+    const w = 1080, h = 1350;
+    const cnv = document.createElement("canvas");
+    cnv.width = w;
+    cnv.height = h;
+    const c = cnv.getContext("2d");
+
+    // Фон — сплошной градиент клубных цветов на весь холст (без "обрыва" на пустой белый низ).
+    const grad = c.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, "#6f0f12");
+    grad.addColorStop(1, "#a81f24");
+    c.fillStyle = grad;
+    c.fillRect(0, 0, w, h);
+
+    const logo = await loadLogoImage();
+    if (logo && logo.width && logo.height) {
+      const logoH = 190;
+      const logoW = logo.width * (logoH / logo.height);
+      c.drawImage(logo, w / 2 - logoW / 2, 70, logoW, logoH);
+    }
+
+    c.textAlign = "center";
+    c.fillStyle = "#ffffff";
+    c.font = "bold 44px sans-serif";
+    c.fillText("«Забей гол»", w / 2, 330);
+    c.font = "500 30px sans-serif";
+    c.fillStyle = "rgba(255,255,255,0.85)";
+    c.fillText("ХК «Знамя-Удмуртия»", w / 2, 372);
+
+    // Светлая карточка-панель со счётом — занимает основную часть холста, без пустот.
+    const panelX = 90, panelY = 440, panelW = w - 180, panelH = 470;
+    roundedRectPath(c, panelX, panelY, panelW, panelH, 36);
+    c.fillStyle = "#eef3f7";
+    c.fill();
+
+    c.fillStyle = "#8f1418";
+    c.font = "bold 140px sans-serif";
+    c.fillText(scoreLine, w / 2, panelY + 250);
+
+    c.font = "600 40px sans-serif";
+    c.fillStyle = "#5a5f66";
+    c.fillText(subtitle, w / 2, panelY + 340);
+
+    // Декоративная полоса клубных цветов под панелью.
+    const stripeY = panelY + panelH + 60;
+    const stripeCount = 9, stripeW = 40, stripeGap = 14;
+    const stripesTotalW = stripeCount * stripeW + (stripeCount - 1) * stripeGap;
+    let stripeX = w / 2 - stripesTotalW / 2;
+    for (let i = 0; i < stripeCount; i++) {
+      c.fillStyle = i % 2 === 0 ? "#ffffff" : "#ffe27a";
+      c.fillRect(stripeX, stripeY, stripeW, 10);
+      stripeX += stripeW + stripeGap;
+    }
+
+    c.font = "bold 42px sans-serif";
+    c.fillStyle = "#ffffff";
+    c.fillText(footer || "Заходи сыграть в Telegram", w / 2, stripeY + 100);
+
+    c.font = "500 28px sans-serif";
+    c.fillStyle = "rgba(255,255,255,0.75)";
+    c.fillText("Официальная игра ХК «Знамя-Удмуртия»", w / 2, h - 70);
+
+    return new Promise((resolve) => cnv.toBlob((blob) => resolve(blob), "image/png"));
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /** Пытается поделиться картинкой (нативный шаринг файла, иначе — через ссылку на сервере). Возвращает true, если получилось. */
+  async function shareCardImage(blob, textCaption) {
+    if (!blob) return false;
+    try {
+      const file = new File([blob], "goal-game-result.png", { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "«Забей гол»", text: textCaption });
+        return true;
+      }
+    } catch (_) {
+      /* пользователь отменил или платформа не поддерживает шаринг файлов — пробуем запасной вариант */
+    }
+    try {
+      const dataUrl = await blobToDataUrl(blob);
+      const res = await api("/api/share-card", { imageBase64: dataUrl });
+      if (res.url) {
+        if (tg && tg.shareToStory) {
+          tg.shareToStory(res.url, { text: textCaption });
+          return true;
+        }
+        if (tg && tg.openLink) {
+          tg.openLink(res.url);
+        } else {
+          window.open(res.url, "_blank");
+        }
+        return true;
+      }
+    } catch (_) {
+      /* не получилось — упадём в текстовый шаринг ниже */
+    }
+    return false;
+  }
+
+  async function shareResult() {
     const verb = lastPlayedMode === "defense" ? "Отразил" : "Забил";
     const text = `${verb} ${successCount} из ${match ? match.shotsPerMatch : 5} в игре «Забей гол» ХК «Знамя-Удмуртия» 🔴⚪ Стрик: ${currentUser.streak} дней. Заходи сыграть!`;
-    const botUrl = (window.GOAL_GAME_BOT_URL || "").trim();
+
+    try {
+      const scoreLine = `${successCount}/${match ? match.shotsPerMatch : 5}`;
+      const subtitle = lastPlayedMode === "defense" ? "отражено в режиме «Вратарь»" : "голов забито вратарю";
+      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "Заходи сыграть — «Забей гол»" });
+      if (await shareCardImage(blob, text)) return;
+    } catch (_) {
+      /* если с картинкой не вышло — делимся обычным текстом ниже */
+    }
+
+    const botUrl = (currentUser && currentUser.botUrl) || "";
     const shareUrl = botUrl
       ? `https://t.me/share/url?url=${encodeURIComponent(botUrl)}&text=${encodeURIComponent(text)}`
       : null;
     if (tg && shareUrl) {
       tg.openTelegramLink(shareUrl);
     } else if (navigator.share) {
+      navigator.share({ text }).catch(() => {});
+    } else {
+      window.prompt("Скопируй и отправь друзьям:", text);
+    }
+  }
+
+  async function shareDuelResult(res) {
+    const subtitle =
+      res.winner === "draw" ? "Ничья в дуэли!" : `Победил ${res.winner === "creator" ? res.creatorName : res.opponentName}`;
+    const text = `⚔️ Дуэль в «Забей гол»: ${res.creatorName} — ${res.creatorGoals}, ${res.opponentName} — ${res.opponentGoals}. ${subtitle}`;
+    try {
+      const scoreLine = `${res.creatorGoals} : ${res.opponentGoals}`;
+      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "⚔️ Вызови друга на дуэль!" });
+      if (await shareCardImage(blob, text)) return;
+    } catch (_) {
+      /* не вышло с картинкой — делимся текстом */
+    }
+    if (navigator.share) {
       navigator.share({ text }).catch(() => {});
     } else {
       window.prompt("Скопируй и отправь друзьям:", text);
