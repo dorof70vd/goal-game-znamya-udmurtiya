@@ -224,4 +224,81 @@ check("вне дня матча безлимит не активен", () => {
   assert.strictEqual(logic.isMatchDayActive(settings, now), false);
 });
 
+check("имена соперников циклически повторяются с пометкой круга", () => {
+  const n = logic.OPPONENTS.length;
+  assert.strictEqual(logic.getOpponentName(1), logic.OPPONENTS[0]);
+  assert.strictEqual(logic.getOpponentName(n), logic.OPPONENTS[n - 1]);
+  assert.ok(logic.getOpponentName(n + 1).includes("круг 2"));
+  assert.ok(logic.getOpponentName(n + 1).includes(logic.OPPONENTS[0]));
+});
+
+check("режим чередуется по чётности уровня", () => {
+  assert.strictEqual(logic.getModeForLevel(1), "attack");
+  assert.strictEqual(logic.getModeForLevel(2), "defense");
+  assert.strictEqual(logic.getModeForLevel(3), "attack");
+  assert.strictEqual(logic.getModeForLevel(30), "defense");
+});
+
+check("матч сохраняет режим в activeMatch и возвращает его в результате", () => {
+  const u = freshUser({ energy: 3, level: 2 }); // level 2 -> defense
+  const now = Date.now();
+  const token = logic.startMatch(u, now);
+  assert.strictEqual(u.activeMatch.mode, "defense");
+  const res = logic.submitMatchResult(u, token, 5, now + 1000);
+  assert.strictEqual(res.playedMode, "defense");
+});
+
+check("достижение «Первый гол» выдаётся за первый забитый гол в атаке", () => {
+  const u = freshUser({ energy: 3, level: 1 });
+  const now = Date.now();
+  const token = logic.startMatch(u, now);
+  const res = logic.submitMatchResult(u, token, 1, now + 500);
+  assert.ok(res.newAchievements.includes("first_goal"));
+});
+
+check("достижение «Хет-трик» выдаётся за 3+ гола за матч в атаке", () => {
+  const u = freshUser({ energy: 3, level: 1 });
+  const now = Date.now();
+  const token = logic.startMatch(u, now);
+  const res = logic.submitMatchResult(u, token, 3, now + 500);
+  assert.ok(res.newAchievements.includes("hat_trick"));
+});
+
+check("достижение «Идеальный матч» и «Стена» зависят от режима", () => {
+  const attacker = freshUser({ energy: 3, level: 1 }); // attack
+  const now = Date.now();
+  let token = logic.startMatch(attacker, now);
+  let res = logic.submitMatchResult(attacker, token, 5, now + 500);
+  assert.ok(res.newAchievements.includes("perfect_match"));
+  assert.ok(!res.newAchievements.includes("keeper_wall"));
+
+  const keeper = freshUser({ energy: 3, level: 2 }); // defense
+  token = logic.startMatch(keeper, now);
+  res = logic.submitMatchResult(keeper, token, 5, now + 500);
+  assert.ok(res.newAchievements.includes("keeper_wall"));
+  assert.ok(!res.newAchievements.includes("perfect_match"));
+});
+
+check("достижения не выдаются повторно", () => {
+  const u = freshUser({ energy: 5, level: 1 });
+  const now = Date.now();
+  let token = logic.startMatch(u, now);
+  const res1 = logic.submitMatchResult(u, token, 1, now + 500);
+  assert.ok(res1.newAchievements.includes("first_goal"));
+  token = logic.startMatch(u, now + 1000);
+  const res2 = logic.submitMatchResult(u, token, 1, now + 1500);
+  assert.ok(!res2.newAchievements.includes("first_goal"));
+});
+
+check("достижения за стрик и уровень срабатывают через checkAchievements", () => {
+  const u = freshUser({ streak: 7, level: 20, totalGoals: 200 });
+  const newly = logic.checkAchievements(u, {});
+  assert.ok(newly.includes("streak_3"));
+  assert.ok(newly.includes("streak_7"));
+  assert.ok(newly.includes("level_10"));
+  assert.ok(newly.includes("level_20"));
+  assert.ok(newly.includes("goals_50"));
+  assert.ok(newly.includes("goals_200"));
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);

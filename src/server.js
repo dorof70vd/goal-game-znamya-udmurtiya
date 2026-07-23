@@ -57,6 +57,9 @@ function serializeUser(user, now) {
     weekGoals: user.weekGoals,
     shotsPerMatch: logic.SHOTS_PER_MATCH,
     difficulty: logic.getKeeperDifficulty(user.level),
+    opponentName: logic.getOpponentName(user.level),
+    mode: logic.getModeForLevel(user.level),
+    achievements: user.achievements || [],
     club: CLUB_NAME,
     matchDayActive,
     newsBonusAvailable: Boolean(NEWS_URL) && logic.isNewsBonusAvailable(user, now),
@@ -79,9 +82,15 @@ app.post("/api/auth", (req, res) => {
   logic.applyEnergyRegen(user, now);
   const loginResult = logic.registerDailyLogin(user, now);
   logic.ensureCurrentWeek(user, now);
+  const newAchievements = logic.checkAchievements(user, {});
   db.saveUser(user);
 
-  res.json({ ...serializeUser(user, now), dailyBonus: loginResult });
+  res.json({
+    ...serializeUser(user, now),
+    dailyBonus: loginResult,
+    newAchievements,
+    achievementCatalog: logic.ACHIEVEMENTS,
+  });
 });
 
 app.get("/api/leaderboard", (req, res) => {
@@ -114,6 +123,8 @@ app.post("/api/match/start", (req, res) => {
     difficulty: logic.getKeeperDifficulty(user.level),
     energy: user.energy,
     unlimited,
+    mode: user.activeMatch.mode,
+    opponentName: logic.getOpponentName(user.level),
   });
 });
 
@@ -166,7 +177,8 @@ if (BOT_TOKEN) {
     const keyboard = new InlineKeyboard().webApp("⚽ Забить гол", `${PUBLIC_URL}/`);
     await ctx.reply(
       `${CLUB_NAME} приглашает сыграть! ⚪🔴\n\n` +
-        `Забивай голы виртуальному вратарю, копи очки и держи стрик каждый день.\n` +
+        `Проходи по очереди настоящих соперников лиги — где-то забивай голы вратарю ⚽, ` +
+        `а где-то сам встань в ворота и отражай броски 🧤. Копи очки, держи стрик и открывай значки.\n` +
         `Энергия восстанавливается сама — заходи почаще!`,
       { reply_markup: keyboard }
     );

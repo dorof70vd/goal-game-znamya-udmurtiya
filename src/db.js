@@ -75,6 +75,7 @@ function getOrCreateUser(telegramId, profile = {}) {
       totalGoals: 0,
       weekGoals: 0,
       weekKey: null, // "YYYY-Www"
+      achievements: [], // id значков (см. game-logic.js ACHIEVEMENTS)
       createdAt: Date.now(),
     };
     persist();

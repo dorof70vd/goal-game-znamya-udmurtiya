@@ -17,6 +17,94 @@ const NEWS_BONUS_CEILING_EXTRA = 2;
 // "новую неделю" по этому смещению, а не по времени сервера.
 const CLUB_UTC_OFFSET_HOURS = 4;
 
+// Реальные соперники по Высшей лиге (сезон 2025-2026), вместо "Соперник №N" —
+// добавляет азарта "дойти до финала" списка. Цикл повторяется с пометкой "круг N".
+const OPPONENTS = [
+  "Маяк",
+  "Академия «Уральский Трубник»",
+  "Никельщик",
+  "Волга-М",
+  "Ак Барс-Динамо-2",
+  "Локомотив",
+  "Кировец",
+];
+
+function getOpponentName(level) {
+  const lvl = Math.max(1, Math.round(level));
+  const idx = (lvl - 1) % OPPONENTS.length;
+  const lap = Math.floor((lvl - 1) / OPPONENTS.length);
+  const name = OPPONENTS[idx];
+  return lap > 0 ? `${name} (круг ${lap + 1})` : name;
+}
+
+// Второй режим игры чередуется по чётности уровня, чтобы не приедалось одно
+// и то же: нечётные уровни — "Забей гол" (атака), чётные — "Вратарь" (защита).
+function getModeForLevel(level) {
+  const lvl = Math.max(1, Math.round(level));
+  return lvl % 2 === 0 ? "defense" : "attack";
+}
+
+// Достижения/значки — просто отражают уже посчитанные показатели пользователя,
+// без отдельного хранения прогресса. Идемпотентны: можно вызывать после
+// каждого матча, новыми будут только реально новые значки.
+const ACHIEVEMENTS = [
+  { id: "first_goal", title: "Первый гол", desc: "Забей свой первый гол в игре." },
+  { id: "hat_trick", title: "Хет-трик", desc: "Забей 3 гола за один матч." },
+  { id: "perfect_match", title: "Идеальный матч", desc: "Забей все 5 из 5 ударов за один матч." },
+  { id: "keeper_wall", title: "Стена", desc: "Отрази все броски соперника в режиме «Вратарь»." },
+  { id: "streak_3", title: "Разогрев", desc: "Заходи в игру 3 дня подряд." },
+  { id: "streak_7", title: "Неделя с клубом", desc: "Заходи в игру 7 дней подряд." },
+  { id: "streak_30", title: "Верный болельщик", desc: "Заходи в игру 30 дней подряд." },
+  { id: "level_10", title: "Знаток лиги", desc: "Дойди до 10-го соперника." },
+  { id: "level_20", title: "Ветеран", desc: "Дойди до 20-го соперника." },
+  { id: "level_max", title: "Чемпион сезона", desc: "Пройди весь список соперников." },
+  { id: "goals_50", title: "Полсотни", desc: "Забей 50 голов всего (по всем матчам)." },
+  { id: "goals_200", title: "Двести", desc: "Забей 200 голов всего (по всем матчам)." },
+];
+
+function ensureAchievements(user) {
+  if (!Array.isArray(user.achievements)) user.achievements = [];
+  return user.achievements;
+}
+
+function unlockAchievement(user, id, newlyUnlocked) {
+  const list = ensureAchievements(user);
+  if (!list.includes(id)) {
+    list.push(id);
+    newlyUnlocked.push(id);
+  }
+}
+
+/**
+ * Проверяет и выдаёт новые достижения после матча (или входа). matchInfo —
+ * необязательные данные о только что сыгранном матче: { goals, mode, perfect }.
+ * Возвращает массив id новых значков (пустой, если ничего нового).
+ */
+function checkAchievements(user, matchInfo = {}) {
+  ensureAchievements(user);
+  const newly = [];
+  const { goals = 0, mode = null, perfect = false } = matchInfo;
+
+  if (mode === "attack") {
+    if (goals >= 1) unlockAchievement(user, "first_goal", newly);
+    if (goals >= 3) unlockAchievement(user, "hat_trick", newly);
+    if (perfect) unlockAchievement(user, "perfect_match", newly);
+  } else if (mode === "defense") {
+    if (perfect) unlockAchievement(user, "keeper_wall", newly);
+  }
+
+  if (user.streak >= 3) unlockAchievement(user, "streak_3", newly);
+  if (user.streak >= 7) unlockAchievement(user, "streak_7", newly);
+  if (user.streak >= 30) unlockAchievement(user, "streak_30", newly);
+  if (user.level >= 10) unlockAchievement(user, "level_10", newly);
+  if (user.level >= 20) unlockAchievement(user, "level_20", newly);
+  if (user.level >= MAX_LEVEL) unlockAchievement(user, "level_max", newly);
+  if (user.totalGoals >= 50) unlockAchievement(user, "goals_50", newly);
+  if (user.totalGoals >= 200) unlockAchievement(user, "goals_200", newly);
+
+  return newly;
+}
+
 function shiftedDate(ts) {
   return new Date(ts + CLUB_UTC_OFFSET_HOURS * 60 * 60 * 1000);
 }
@@ -157,8 +245,9 @@ function startMatch(user, now = Date.now(), unlimited = false) {
   if (!unlimited) {
     user.energy -= 1;
   }
+  const mode = getModeForLevel(user.level);
   const token = `${user.id}.${now}.${Math.random().toString(36).slice(2, 10)}`;
-  user.activeMatch = { token, createdAt: now, level: user.level, unlimited };
+  user.activeMatch = { token, createdAt: now, level: user.level, unlimited, mode };
   return token;
 }
 
@@ -176,6 +265,7 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
     throw new Error("MATCH_EXPIRED");
   }
   const safeGoals = Math.max(0, Math.min(SHOTS_PER_MATCH, Math.round(goals)));
+  const mode = match.mode || getModeForLevel(match.level || user.level);
 
   ensureCurrentWeek(user, now);
   user.totalGoals += safeGoals;
@@ -188,13 +278,17 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
   }
   user.activeMatch = null;
 
+  const newAchievements = checkAchievements(user, { goals: safeGoals, mode, perfect });
+
   return {
     goals: safeGoals,
     perfect,
+    playedMode: mode,
     newLevel: user.level,
     totalGoals: user.totalGoals,
     weekGoals: user.weekGoals,
     bestScore: user.bestScore,
+    newAchievements,
   };
 }
 
@@ -227,6 +321,8 @@ module.exports = {
   CLUB_UTC_OFFSET_HOURS,
   NEWS_BONUS_ENERGY,
   NEWS_BONUS_CEILING_EXTRA,
+  OPPONENTS,
+  ACHIEVEMENTS,
   dateKey,
   weekKey,
   applyEnergyRegen,
@@ -237,6 +333,9 @@ module.exports = {
   isMatchDayActive,
   ensureCurrentWeek,
   getKeeperDifficulty,
+  getOpponentName,
+  getModeForLevel,
+  checkAchievements,
   canStartMatch,
   startMatch,
   submitMatchResult,
