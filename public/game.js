@@ -33,6 +33,8 @@
     overlayBtn3: document.getElementById("overlayBtn3"),
     overlayBtn4: document.getElementById("overlayBtn4"),
     overlayBtn5: document.getElementById("overlayBtn5"),
+    overlayBtn6: document.getElementById("overlayBtn6"),
+    overlayList: document.getElementById("overlayList"),
     energyStat: document.getElementById("energyStat"),
     streakStat: document.getElementById("streakStat"),
     diffStat: document.getElementById("diffStat"),
@@ -174,6 +176,44 @@
     confetti = confetti.filter((p) => p.life < 90 && p.y < H + 30);
   }
 
+  // ------------------------- Праздничный эффект (идеальный матч/победа) ---
+  // Взлетающий герб клуба + вспышка экрана + двойная порция конфетти —
+  // отдельно от обычного "гол забит", для по-настоящему крупных побед.
+
+  let logoImg = null; // предзагружается ниже, используется и тут, и в карточке результата
+  let celebration = null; // { startTs, duration }
+
+  function spawnBigCelebration() {
+    spawnConfetti();
+    spawnConfetti();
+    celebration = { startTs: performance.now(), duration: 1500 };
+  }
+
+  function updateAndDrawCelebration() {
+    if (!celebration) return;
+    const t = (performance.now() - celebration.startTs) / celebration.duration;
+    if (t >= 1) { celebration = null; return; }
+
+    // Вспышка экрана — яркая в начале, быстро гаснет.
+    const flash = Math.max(0, 1 - t * 4.5);
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${(flash * 0.55).toFixed(3)})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Взлетающий и тающий герб клуба.
+    if (logoImg && logoImg.width && logoImg.height) {
+      const alpha = Math.max(0, 1 - t);
+      const size = 90 + t * 50;
+      const w0 = size, h0 = size * (logoImg.height / logoImg.width);
+      const y = H * 0.42 - t * H * 0.22;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(logoImg, W / 2 - w0 / 2, y - h0 / 2, w0, h0);
+      ctx.restore();
+    }
+  }
+
   // ------------------------- Достижения ------------------------------------
 
   let achievementCatalog = [];
@@ -224,6 +264,12 @@
     return SLOTS[Math.max(0, Math.min(SLOTS.length - 1, idx))];
   }
 
+  function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  let kickAnim = null; // { startTs } — короткая анимация "удара ногой" в момент броска
+
   function draw() {
     ctx.clearRect(0, 0, W, H);
 
@@ -252,34 +298,109 @@
       ctx.beginPath(); ctx.moveTo(GOAL.left, y); ctx.lineTo(GOAL.right, y); ctx.stroke();
     }
 
-    // Вратарь
+    // Вратарь — с наклоном тела и вытянутой рукой в сторону броска (вместо
+    // статичного прямоугольника), плюс отдельные позы для сэйва/пропущенного.
     const kx = GOAL.left + keeperX * (GOAL.right - GOAL.left);
     const ky = GOAL.top + (GOAL.bottom - GOAL.top) * 0.55;
+
+    let diveT = 1, diveDir = 0;
+    if (keeperDive) {
+      diveT = Math.min(1, (performance.now() - keeperDive.startTs) / keeperDive.duration);
+      diveDir = keeperDive.to - keeperDive.from;
+    }
+    const dirSign = diveDir > 0.01 ? 1 : diveDir < -0.01 ? -1 : 0;
+    const leanProgress = diveT < 1 ? Math.min(1, diveT * 3) : 0.55; // держит небольшой наклон и после приземления
+    const leanAngle = dirSign * 0.4 * leanProgress;
+    const isSavePose = lastResult === "save" || lastResult === "playerSave";
+    const isConcedePose = lastResult === "goal" || lastResult === "concede";
+    const squash = isConcedePose ? 0.82 : 1; // немного "оседает", если пропустил
+
+    ctx.save();
+    ctx.translate(kx, ky);
+    ctx.rotate(leanAngle);
+    ctx.scale(1, squash);
+
     ctx.fillStyle = "#222";
-    ctx.fillRect(kx - 22, ky - 26, 44, 52);
+    ctx.fillRect(-22, -26, 44, 52);
     ctx.fillStyle = "#c1272d";
-    ctx.fillRect(kx - 22, ky - 26, 44, 10);
+    ctx.fillRect(-22, -26, 44, 10);
     ctx.fillStyle = "#ffe0b2";
-    ctx.beginPath(); ctx.arc(kx, ky - 32, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -32, 12, 0, Math.PI * 2); ctx.fill();
+
+    ctx.strokeStyle = "#222";
+    ctx.lineWidth = 8;
+    ctx.lineCap = "round";
+    if (isSavePose) {
+      // Руки вверх — "взял!"
+      ctx.beginPath(); ctx.moveTo(-14, -18); ctx.lineTo(-26, -46); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(14, -18); ctx.lineTo(26, -46); ctx.stroke();
+    } else if (keeperDive && !isConcedePose) {
+      // Рука тянется в сторону броска, чем дальше в прыжке — тем сильнее вытянута.
+      const reach = 18 + 22 * Math.min(1, diveT * 1.6);
+      const armY = -20 - 10 * Math.min(1, diveT * 1.6);
+      ctx.beginPath(); ctx.moveTo(dirSign * 14, -18); ctx.lineTo(dirSign * reach, armY); ctx.stroke();
+    }
+    ctx.restore();
 
     // Игрок/точка удара (низ поля) — в режиме "Вратарь" тут бьёт соперник
     const px = W / 2, py = H * 0.9;
     ctx.fillStyle = currentMode === "defense" ? "#2b3a55" : "#8f1418";
     ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.fill();
+
+    // Короткий "замах ногой" в момент удара — оживляет статичную точку игрока.
+    if (kickAnim) {
+      const kt = (performance.now() - kickAnim.startTs) / 260;
+      if (kt >= 1) {
+        kickAnim = null;
+      } else {
+        const swing = Math.sin(Math.min(1, kt) * Math.PI);
+        ctx.strokeStyle = currentMode === "defense" ? "#2b3a55" : "#8f1418";
+        ctx.lineWidth = 6;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(px, py + 6);
+        ctx.lineTo(px + swing * 16, py + 6 - swing * 14);
+        ctx.stroke();
+      }
+    }
+
     ctx.font = "11px sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = "#333";
     ctx.fillText(currentMode === "defense" ? "Бьёт соперник" : "Бьёшь ты", px, py + 24);
 
-    // Мяч
+    // Мяч — с лёгким шлейфом "скорости", вращением и уменьшением по мере
+    // удаления к воротам (простое ощущение перспективы без новых картинок).
     if (ball) {
       const t = Math.min(1, (performance.now() - ball.startTs) / ball.duration);
-      const ease = 1 - Math.pow(1 - t, 3);
+      const ease = easeOutCubic(t);
       const bx = px + (ball.targetX - px) * ease;
       const by = py + (ball.targetY - py) * ease - Math.sin(Math.PI * ease) * (ball.high ? 46 : 14);
+
+      for (let step = 3; step >= 1; step--) {
+        const tt = Math.max(0, t - step * 0.05);
+        const easeTt = easeOutCubic(tt);
+        const tx = px + (ball.targetX - px) * easeTt;
+        const ty = py + (ball.targetY - py) * easeTt - Math.sin(Math.PI * easeTt) * (ball.high ? 46 : 14);
+        const trailR = Math.max(1.5, 7 * (1 - 0.3 * easeTt) * (1 - step * 0.12));
+        ctx.globalAlpha = 0.12 * (4 - step);
+        ctx.fillStyle = "#111";
+        ctx.beginPath(); ctx.arc(tx, ty, trailR, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      const radius = 7 * (1 - 0.3 * ease);
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(ease * Math.PI * 5);
       ctx.fillStyle = "#111";
-      ctx.beginPath(); ctx.arc(bx, by, 7, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(-radius, 0); ctx.lineTo(radius, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, -radius); ctx.lineTo(0, radius); ctx.stroke();
+      ctx.restore();
+
       if (t >= 1 && !ball.resolved) {
         resolveShot();
       }
@@ -325,6 +446,7 @@
     }
 
     updateAndDrawConfetti();
+    updateAndDrawCelebration();
 
     requestAnimationFrame(draw);
   }
@@ -347,7 +469,7 @@
     const tick = () => {
       if (!keeperDive) return;
       const t = Math.min(1, (performance.now() - keeperDive.startTs) / keeperDive.duration);
-      keeperX = keeperDive.from + (keeperDive.to - keeperDive.from) * t;
+      keeperX = keeperDive.from + (keeperDive.to - keeperDive.from) * easeOutCubic(t);
       if (t < 1) requestAnimationFrame(tick);
     };
     tick();
@@ -444,7 +566,7 @@
     const tick = () => {
       if (!keeperDive) return;
       const t = Math.min(1, (performance.now() - keeperDive.startTs) / keeperDive.duration);
-      keeperX = keeperDive.from + (keeperDive.to - keeperDive.from) * t;
+      keeperX = keeperDive.from + (keeperDive.to - keeperDive.from) * easeOutCubic(t);
       if (t < 1) requestAnimationFrame(tick);
     };
     tick();
@@ -467,6 +589,7 @@
       tooWeak,
       resolved: false,
     };
+    kickAnim = { startTs: performance.now() };
     startKeeperDive(slot, match.difficulty);
   }
 
@@ -504,10 +627,20 @@
 
   // ------------------------------- Матч flow -------------------------------
 
-  function showOverlay({ title, text, btnLabel, btn2Label, btn3Label, btn4Label, btn5Label, onBtn, onBtn2, onBtn3, onBtn4, onBtn5 }) {
+  function showOverlay({
+    title, text, btnLabel, btn2Label, btn3Label, btn4Label, btn5Label, btn6Label,
+    onBtn, onBtn2, onBtn3, onBtn4, onBtn5, onBtn6, renderList,
+  }) {
     el.overlay.classList.remove("hidden");
     el.overlayTitle.textContent = title;
-    el.overlayText.textContent = text;
+    el.overlayText.textContent = text || "";
+    el.overlayList.innerHTML = "";
+    if (renderList) {
+      el.overlayList.style.display = "flex";
+      renderList(el.overlayList);
+    } else {
+      el.overlayList.style.display = "none";
+    }
     el.overlayBtn.style.display = btnLabel ? "inline-block" : "none";
     el.overlayBtn.textContent = btnLabel || "";
     el.overlayBtn.onclick = onBtn || null;
@@ -523,8 +656,79 @@
     el.overlayBtn5.style.display = btn5Label ? "inline-block" : "none";
     el.overlayBtn5.textContent = btn5Label || "";
     el.overlayBtn5.onclick = onBtn5 || null;
+    el.overlayBtn6.style.display = btn6Label ? "inline-block" : "none";
+    el.overlayBtn6.textContent = btn6Label || "";
+    el.overlayBtn6.onclick = onBtn6 || null;
   }
   function hideOverlay() { el.overlay.classList.add("hidden"); }
+
+  // ------------------------- Аватарки / бейджи команд (без картинок) -------
+
+  const BADGE_COLORS = ["#c1272d", "#2b3a55", "#1a7a2e", "#7a5c1a", "#5a3d7a", "#8f1418", "#0e6e6e"];
+  function colorForText(text) {
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    return BADGE_COLORS[hash % BADGE_COLORS.length];
+  }
+  function initialsFor(name) {
+    const clean = (name || "").replace(/[«»"()0-9-]/g, " ").trim();
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (!words.length) return "??";
+    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+  function makeAvatarFallback(name) {
+    const div = document.createElement("div");
+    div.className = "lb-avatar lb-avatar-fallback";
+    div.style.background = colorForText(name || "?");
+    div.textContent = initialsFor(name);
+    return div;
+  }
+  function makeAvatarEl(name, photoUrl) {
+    if (!photoUrl) return makeAvatarFallback(name);
+    const img = document.createElement("img");
+    img.className = "lb-avatar";
+    img.src = photoUrl;
+    img.alt = "";
+    img.referrerPolicy = "no-referrer";
+    img.onerror = () => { img.replaceWith(makeAvatarFallback(name)); };
+    return img;
+  }
+
+  function renderLeaderboardRows(container, rows) {
+    if (!rows.length) return;
+    rows.forEach((r, i) => {
+      const row = document.createElement("div");
+      row.className = "lb-row";
+      const rank = document.createElement("span");
+      rank.className = "lb-rank";
+      rank.textContent = `${i + 1}.`;
+      const name = document.createElement("span");
+      name.className = "lb-name";
+      name.textContent = r.name;
+      const score = document.createElement("span");
+      score.className = "lb-score";
+      score.textContent = r.score;
+      row.append(rank, makeAvatarEl(r.name, r.photoUrl), name, score);
+      container.appendChild(row);
+    });
+  }
+
+  function renderRoadRows(container, rows) {
+    rows.forEach((r) => {
+      const row = document.createElement("div");
+      row.className = `lb-row road-row road-${r.status}`;
+      const badge = makeAvatarFallback(r.name);
+      const name = document.createElement("span");
+      name.className = "lb-name";
+      name.textContent = `${r.level}. ${r.name}`;
+      const status = document.createElement("span");
+      status.className = "lb-score";
+      status.textContent = r.status === "done" ? "✅" : r.status === "current" ? "▶️" : "⏳";
+      row.append(badge, name, status);
+      container.appendChild(row);
+    });
+  }
 
   function showAchievements() {
     const earned = new Set((currentUser && currentUser.achievements) || []);
@@ -543,14 +747,25 @@
 
   async function showLeaderboard() {
     const board = await fetch("/api/leaderboard").then((r) => r.json());
-    const lines = board.week.length
-      ? board.week.slice(0, 10).map((r, i) => `${i + 1}. ${r.name} — ${r.score}`).join("\n")
-      : "Пока пусто — стань первым!";
+    const rows = board.week.slice(0, 10);
     showOverlay({
       title: "🏆 Топ недели",
-      text: lines,
+      text: rows.length ? "" : "Пока пусто — стань первым!",
+      renderList: rows.length ? (container) => renderLeaderboardRows(container, rows) : null,
       btnLabel: "Назад",
       onBtn: () => renderHome(),
+    });
+  }
+
+  function showOpponentMap() {
+    if (!currentUser) return;
+    const rows = Array.isArray(currentUser.opponentRoad) ? currentUser.opponentRoad : [];
+    showOverlay({
+      title: "🗺️ Карта соперников",
+      text: rows.length ? "" : "Карта пока недоступна.",
+      renderList: rows.length ? (container) => renderRoadRows(container, rows) : null,
+      btnLabel: "Назад",
+      onBtn: renderHome,
     });
   }
 
@@ -633,6 +848,8 @@
         onBtn4: showAchievements,
         btn5Label: "⚔️ Вызвать на дуэль",
         onBtn5: startDuelChallenge,
+        btn6Label: "🗺️ Карта соперников",
+        onBtn6: showOpponentMap,
       });
       return;
     }
@@ -651,6 +868,8 @@
       onBtn4: showAchievements,
       btn5Label: "⚔️ Вызвать на дуэль",
       onBtn5: startDuelChallenge,
+      btn6Label: "🗺️ Карта соперников",
+      onBtn6: showOpponentMap,
     });
   }
 
@@ -711,6 +930,10 @@
       if (res.newAchievements && res.newAchievements.length) {
         const names = res.newAchievements.map(achievementTitle).join(", ");
         text += `\n\n🏅 Новое достижение: ${names}!`;
+      }
+
+      if (perfect) {
+        spawnBigCelebration();
       }
 
       showOverlay({
@@ -798,9 +1021,11 @@
       if (res.finished) {
         if (res.winner === "draw") {
           title = "🤝 Ничья!";
+          spawnConfetti();
         } else {
           const iWon = res.winner === res.role;
           title = iWon ? "🏆 Победа в дуэли!" : "Поражение в дуэли";
+          if (iWon) spawnBigCelebration();
         }
         text = `${res.creatorName}: ${res.creatorGoals} — ${res.opponentName}: ${res.opponentGoals}`;
       } else {
@@ -1043,6 +1268,9 @@
 
   async function init() {
     layout();
+    // Заранее подгружаем герб клуба — нужен и для праздничного эффекта на
+    // канвасе, и для карточки результата (см. loadLogoImage() ниже).
+    loadLogoImage().then((img) => { logoImg = img; });
     if (!initData) {
       showOverlay({
         title: "Открой через Telegram",

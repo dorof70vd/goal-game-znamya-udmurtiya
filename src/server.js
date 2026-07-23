@@ -63,6 +63,7 @@ function serializeUser(user, now) {
     opponentName: logic.getOpponentName(user.level),
     mode: logic.getModeForLevel(user.level),
     achievements: user.achievements || [],
+    opponentRoad: logic.buildOpponentRoad(user.level),
     club: CLUB_NAME,
     matchDayActive,
     newsBonusAvailable: Boolean(NEWS_URL) && logic.isNewsBonusAvailable(user, now),
@@ -85,6 +86,7 @@ app.post("/api/auth", (req, res) => {
   const user = db.getOrCreateUser(tgUser.id, {
     username: tgUser.username,
     firstName: tgUser.first_name,
+    photoUrl: tgUser.photo_url,
   });
 
   logic.applyEnergyRegen(user, now);

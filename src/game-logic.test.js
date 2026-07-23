@@ -418,4 +418,28 @@ check("неверный токен дуэли отклоняется", () => {
   assert.throws(() => logic.submitDuelResult(duel, "100", "чужой-токен", 5), /INVALID_DUEL_TOKEN/);
 });
 
+check("лидерборд отдаёт photoUrl игрока (или null, если фото нет)", () => {
+  const u1 = freshUser({ id: "1", firstName: "Вадим", weekGoals: 10, totalGoals: 10, photoUrl: "https://t.me/photo1.jpg" });
+  const u2 = freshUser({ id: "2", firstName: "Кирилл", weekGoals: 5, totalGoals: 5 });
+  const board = logic.buildLeaderboard([u1, u2]);
+  assert.strictEqual(board.week[0].photoUrl, "https://t.me/photo1.jpg");
+  assert.strictEqual(board.week[1].photoUrl, null);
+});
+
+check("дорожка соперников показывает пройденных, текущего и предстоящих", () => {
+  const road = logic.buildOpponentRoad(5, 2, 3);
+  const levels = road.map((r) => r.level);
+  assert.deepStrictEqual(levels, [3, 4, 5, 6, 7, 8]);
+  assert.strictEqual(road.find((r) => r.level === 3).status, "done");
+  assert.strictEqual(road.find((r) => r.level === 5).status, "current");
+  assert.strictEqual(road.find((r) => r.level === 8).status, "upcoming");
+});
+
+check("дорожка соперников не выходит за начало и конец списка уровней", () => {
+  const roadStart = logic.buildOpponentRoad(1, 2, 3);
+  assert.strictEqual(roadStart[0].level, 1);
+  const roadEnd = logic.buildOpponentRoad(logic.MAX_LEVEL, 2, 3);
+  assert.strictEqual(roadEnd[roadEnd.length - 1].level, logic.MAX_LEVEL);
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);

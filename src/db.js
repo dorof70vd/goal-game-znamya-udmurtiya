@@ -69,6 +69,7 @@ function getOrCreateUser(telegramId, profile = {}) {
       id,
       username: profile.username || null,
       firstName: profile.firstName || null,
+      photoUrl: profile.photoUrl || null, // фото профиля Telegram — для аватарки в лидерборде
       energy: 8,
       maxEnergy: 8,
       lastEnergyTs: Date.now(),
@@ -94,6 +95,10 @@ function getOrCreateUser(telegramId, profile = {}) {
     }
     if (profile.firstName && state.users[id].firstName !== profile.firstName) {
       state.users[id].firstName = profile.firstName;
+      persist();
+    }
+    if (profile.photoUrl && state.users[id].photoUrl !== profile.photoUrl) {
+      state.users[id].photoUrl = profile.photoUrl;
       persist();
     }
   }

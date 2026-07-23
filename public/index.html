@@ -44,6 +44,19 @@
   #overlay.hidden { display:none; }
   #overlay h2 { margin: 0; font-size: 22px; }
   #overlay p { margin: 0; opacity: .9; font-size: 14px; line-height:1.4; white-space: pre-line; max-height: 46vh; overflow-y: auto; }
+  #overlay p:empty { display: none; }
+
+  #overlayList { display:none; flex-direction:column; gap:6px; width:100%; max-height:46vh; overflow-y:auto; text-align:left; }
+  .lb-row { display:flex; align-items:center; gap:8px; background: rgba(255,255,255,.08); border-radius: 10px; padding: 6px 10px; }
+  .lb-rank { width: 20px; font-weight:700; opacity:.85; font-size:13px; flex-shrink:0; }
+  .lb-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; flex-shrink:0; background:#8f1418; }
+  .lb-avatar-fallback { display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:12px; }
+  .lb-name { flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lb-score { font-weight:700; font-size:13px; flex-shrink:0; }
+  .road-row.road-done { opacity: .55; }
+  .road-row.road-current { background: rgba(255,226,122,.22); border: 1px solid rgba(255,226,122,.55); }
+  .road-row.road-upcoming { opacity: .9; }
+
   .btn {
     border: none; border-radius: 999px; padding: 12px 26px; font-size: 15px; font-weight: 700;
     background: var(--club-white); color: var(--club-red-dark); cursor:pointer;
@@ -86,11 +99,13 @@
       <div id="overlay">
         <h2 id="overlayTitle">Загрузка…</h2>
         <p id="overlayText">Подключаемся к Telegram…</p>
+        <div id="overlayList"></div>
         <button class="btn" id="overlayBtn" style="display:none;">Играть</button>
         <button class="btn secondary" id="overlayBtn2" style="display:none;">Таблица лидеров</button>
         <button class="btn secondary" id="overlayBtn3" style="display:none;">📰 +2 попытки за новость клуба</button>
         <button class="btn secondary" id="overlayBtn4" style="display:none;">🏅 Достижения</button>
         <button class="btn secondary" id="overlayBtn5" style="display:none;">⚔️ Вызвать на дуэль</button>
+        <button class="btn secondary" id="overlayBtn6" style="display:none;">🗺️ Карта соперников</button>
       </div>
     </div>
 

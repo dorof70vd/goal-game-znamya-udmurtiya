@@ -445,14 +445,34 @@ function buildLeaderboard(users, now = Date.now(), limit = 20) {
   const byWeek = [...withCurrentWeek]
     .sort((a, b) => b.weekGoals - a.weekGoals)
     .slice(0, limit)
-    .map((u) => ({ id: u.id, name: u.firstName || u.username || "Болельщик", score: u.weekGoals }));
+    .map((u) => ({ id: u.id, name: u.firstName || u.username || "Болельщик", score: u.weekGoals, photoUrl: u.photoUrl || null }));
 
   const byAllTime = [...withCurrentWeek]
     .sort((a, b) => b.totalGoals - a.totalGoals)
     .slice(0, limit)
-    .map((u) => ({ id: u.id, name: u.firstName || u.username || "Болельщик", score: u.totalGoals }));
+    .map((u) => ({ id: u.id, name: u.firstName || u.username || "Болельщик", score: u.totalGoals, photoUrl: u.photoUrl || null }));
 
   return { week: byWeek, allTime: byAllTime, weekKey: curWeek };
+}
+
+/**
+ * "Дорожка" соперников вокруг текущего уровня игрока — немного пройденных
+ * (для ощущения прогресса) + текущий + немного предстоящих. Используется для
+ * визуальной "карты соперников" на клиенте вместо сухого "следующий соперник: X".
+ */
+function buildOpponentRoad(level, behind = 2, ahead = 4) {
+  const lvl = Math.max(1, Math.round(level));
+  const from = Math.max(1, lvl - behind);
+  const to = Math.min(MAX_LEVEL, lvl + ahead);
+  const road = [];
+  for (let l = from; l <= to; l++) {
+    road.push({
+      level: l,
+      name: getOpponentName(l),
+      status: l < lvl ? "done" : l === lvl ? "current" : "upcoming",
+    });
+  }
+  return road;
 }
 
 module.exports = {
@@ -496,4 +516,5 @@ module.exports = {
   startDuelAttempt,
   submitDuelResult,
   buildLeaderboard,
+  buildOpponentRoad,
 };
