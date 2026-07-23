@@ -41,25 +41,25 @@ function check(name, fn) {
 console.log("game-logic tests:");
 
 check("энергия не восстанавливается сверх максимума", () => {
-  const u = freshUser({ energy: 5, lastEnergyTs: Date.now() - 10 * 60 * 60 * 1000 });
+  const u = freshUser({ energy: 5, lastEnergyTs: Date.now() - 10 * logic.ENERGY_REGEN_MS });
   logic.applyEnergyRegen(u);
   assert.strictEqual(u.energy, 5);
 });
 
-check("энергия восстанавливается по 1 в час", () => {
+check("энергия восстанавливается по 1 за цикл регенерации", () => {
   const now = Date.now();
-  const u = freshUser({ energy: 2, maxEnergy: 5, lastEnergyTs: now - 3 * 60 * 60 * 1000 });
+  const u = freshUser({ energy: 2, maxEnergy: 5, lastEnergyTs: now - 3 * logic.ENERGY_REGEN_MS });
   logic.applyEnergyRegen(u, now);
   assert.strictEqual(u.energy, 5); // 2 + 3, capped at 5
 });
 
 check("energy регенерация не превышает максимум и не теряет остаток времени", () => {
   const now = Date.now();
-  const u = freshUser({ energy: 3, maxEnergy: 5, lastEnergyTs: now - 90 * 60 * 1000 }); // 1.5 часа
+  const u = freshUser({ energy: 3, maxEnergy: 5, lastEnergyTs: now - 1.5 * logic.ENERGY_REGEN_MS });
   logic.applyEnergyRegen(u, now);
-  assert.strictEqual(u.energy, 4); // только 1 полный час засчитан
+  assert.strictEqual(u.energy, 4); // только 1 полный цикл засчитан
   const msLeft = logic.msUntilNextEnergy(u, now);
-  assert.ok(msLeft > 0 && msLeft <= 30 * 60 * 1000 + 1000);
+  assert.ok(msLeft > 0 && msLeft <= 0.5 * logic.ENERGY_REGEN_MS + 1000);
 });
 
 check("первый вход даёт стрик = 1 и бонус энергии", () => {
