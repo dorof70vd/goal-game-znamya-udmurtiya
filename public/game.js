@@ -32,6 +32,7 @@
     overlayBtn2: document.getElementById("overlayBtn2"),
     overlayBtn3: document.getElementById("overlayBtn3"),
     overlayBtn4: document.getElementById("overlayBtn4"),
+    overlayBtn5: document.getElementById("overlayBtn5"),
     energyStat: document.getElementById("energyStat"),
     streakStat: document.getElementById("streakStat"),
     diffStat: document.getElementById("diffStat"),
@@ -188,6 +189,7 @@
 
   let currentUser = null;
   let match = null; // { token, difficulty, shotsPerMatch, mode, opponentName }
+  let duelContext = null; // { duelId, token, role } — заполняется, когда играем дуэль, а не обычный матч
   let currentMode = "attack"; // 'attack' | 'defense' — второй режим "Вратарь"
   let shotIndex = 0;
   let successCount = 0;
@@ -502,7 +504,7 @@
 
   // ------------------------------- Матч flow -------------------------------
 
-  function showOverlay({ title, text, btnLabel, btn2Label, btn3Label, btn4Label, onBtn, onBtn2, onBtn3, onBtn4 }) {
+  function showOverlay({ title, text, btnLabel, btn2Label, btn3Label, btn4Label, btn5Label, onBtn, onBtn2, onBtn3, onBtn4, onBtn5 }) {
     el.overlay.classList.remove("hidden");
     el.overlayTitle.textContent = title;
     el.overlayText.textContent = text;
@@ -518,6 +520,9 @@
     el.overlayBtn4.style.display = btn4Label ? "inline-block" : "none";
     el.overlayBtn4.textContent = btn4Label || "";
     el.overlayBtn4.onclick = onBtn4 || null;
+    el.overlayBtn5.style.display = btn5Label ? "inline-block" : "none";
+    el.overlayBtn5.textContent = btn5Label || "";
+    el.overlayBtn5.onclick = onBtn5 || null;
   }
   function hideOverlay() { el.overlay.classList.add("hidden"); }
 
@@ -589,6 +594,8 @@
         onBtn3: claimNewsBonus,
         btn4Label: "🏅 Достижения",
         onBtn4: showAchievements,
+        btn5Label: "⚔️ Вызвать на дуэль",
+        onBtn5: startDuelChallenge,
       });
       return;
     }
@@ -605,6 +612,8 @@
       onBtn3: claimNewsBonus,
       btn4Label: "🏅 Достижения",
       onBtn4: showAchievements,
+      btn5Label: "⚔️ Вызвать на дуэль",
+      onBtn5: startDuelChallenge,
     });
   }
 
@@ -638,6 +647,9 @@
 
   let lastPlayedMode = "attack";
   async function finishMatch() {
+    if (duelContext) {
+      return finishDuelMatch();
+    }
     const playedMode = currentMode;
     lastPlayedMode = playedMode;
     try {
@@ -684,6 +696,124 @@
     }
   }
 
+  // ------------------------------- Дуэли ---------------------------------
+
+  async function startDuelChallenge() {
+    try {
+      const res = await api("/api/duel/create", {});
+      const shareText =
+        `⚔️ Вызываю тебя на дуэль в «Забей гол» — ХК «Знамя-Удмуртия»! ` +
+        `${res.shotsPerDuel} ударов, у обоих одинаковый вратарь — честная игра.`;
+      if (res.shareUrl) {
+        if (tg && tg.openTelegramLink) {
+          const url = `https://t.me/share/url?url=${encodeURIComponent(res.shareUrl)}&text=${encodeURIComponent(shareText)}`;
+          tg.openTelegramLink(url);
+        } else {
+          window.prompt("Скопируй и отправь другу:", `${shareText}\n${res.shareUrl}`);
+        }
+      }
+      showOverlay({
+        title: "⚔️ Дуэль создана!",
+        text:
+          `Ссылка отправлена (или скопирована) — перешли её другу, чтобы он принял вызов. ` +
+          `А пока сыграй свою попытку: ${res.shotsPerDuel} ударов против вратаря уровня «${res.difficulty.tier}».`,
+        btnLabel: "Играть свою попытку",
+        onBtn: () => startDuelMatchFlow(res.duelId),
+        btn2Label: "Назад",
+        onBtn2: renderHome,
+      });
+    } catch (err) {
+      showOverlay({ title: "Не получилось", text: "Не удалось создать дуэль, попробуй ещё раз.", btnLabel: "Ок", onBtn: renderHome });
+    }
+  }
+
+  async function startDuelMatchFlow(duelId) {
+    try {
+      const res = await api("/api/duel/start", { duelId });
+      duelContext = { duelId, token: res.token, role: res.role };
+      match = { token: res.token, shotsPerMatch: res.shotsPerDuel, difficulty: res.difficulty, mode: "attack" };
+      currentMode = "attack";
+      shotIndex = 0;
+      successCount = 0;
+      keeperX = 0.5;
+      keeperDive = null;
+      playerDiveSlot = null;
+      ball = null;
+      hideOverlay();
+      el.footer.textContent = `Дуэль! Удар 1 из ${match.shotsPerMatch} — зажми и веди пальцем, отпусти для удара.`;
+    } catch (err) {
+      const code = err.payload && err.payload.error;
+      const text =
+        code === "ALREADY_PLAYED"
+          ? "Ты уже сыграл свою попытку в этой дуэли — жди результата, он придёт в чат бота, как только сыграет соперник."
+          : code === "DUEL_FULL"
+          ? "В этой дуэли уже играют два других болельщика."
+          : "Не получилось начать дуэль, попробуй ещё раз.";
+      showOverlay({ title: "⚔️ Дуэль", text, btnLabel: "На главный экран", onBtn: renderHome });
+    }
+  }
+
+  async function finishDuelMatch() {
+    const ctx = duelContext;
+    try {
+      const res = await api("/api/duel/result", { duelId: ctx.duelId, token: ctx.token, goals: successCount });
+      let title, text;
+      if (res.finished) {
+        if (res.winner === "draw") {
+          title = "🤝 Ничья!";
+        } else {
+          const iWon = res.winner === res.role;
+          title = iWon ? "🏆 Победа в дуэли!" : "Поражение в дуэли";
+        }
+        text = `${res.creatorName}: ${res.creatorGoals} — ${res.opponentName}: ${res.opponentGoals}`;
+      } else {
+        title = "Попытка засчитана!";
+        text = `Ты выбил ${successCount} из ${match.shotsPerMatch}. Ждём, пока сыграет соперник — результат придёт в чат бота.`;
+      }
+      showOverlay({ title, text, btnLabel: "На главный экран", onBtn: renderHome });
+    } catch (err) {
+      showOverlay({ title: "Ошибка", text: "Не удалось сохранить результат дуэли.", btnLabel: "Ок", onBtn: renderHome });
+    } finally {
+      duelContext = null;
+      match = null;
+    }
+  }
+
+  async function renderDuelInvite(duelId) {
+    try {
+      const info = await api("/api/duel/info", { duelId });
+      if (info.role === "spectator") {
+        const text = info.finished
+          ? `${info.creatorName}: ${info.creatorGoals} — ${info.opponentName}: ${info.opponentGoals}`
+          : "В этой дуэли уже играют два других болельщика.";
+        showOverlay({ title: "⚔️ Дуэль занята", text, btnLabel: "На главный экран", onBtn: renderHome });
+        return;
+      }
+      if (info.alreadyPlayed) {
+        const text = info.finished
+          ? `${info.creatorName}: ${info.creatorGoals} — ${info.opponentName}: ${info.opponentGoals}`
+          : "Ты уже сыграл свою попытку — ждём соперника, результат придёт в чат бота.";
+        showOverlay({
+          title: info.finished ? "⚔️ Дуэль завершена" : "⚔️ Дуэль",
+          text,
+          btnLabel: "На главный экран",
+          onBtn: renderHome,
+        });
+        return;
+      }
+      showOverlay({
+        title: "⚔️ Вызов на дуэль!",
+        text: `${info.creatorName} вызывает тебя на дуэль: ${info.shotsPerDuel} ударов, вратарь уровня «${info.difficulty.tier}». Готов?`,
+        btnLabel: "Принять вызов",
+        onBtn: () => startDuelMatchFlow(duelId),
+        btn2Label: "На главный экран",
+        onBtn2: renderHome,
+      });
+    } catch (err) {
+      showOverlay({ title: "Дуэль не найдена", text: "Ссылка устарела или недействительна.", btnLabel: "На главный экран", onBtn: renderHome });
+    }
+  }
+
   function shareResult() {
     const verb = lastPlayedMode === "defense" ? "Отразил" : "Забил";
     const text = `${verb} ${successCount} из ${match ? match.shotsPerMatch : 5} в игре «Забей гол» ХК «Знамя-Удмуртия» 🔴⚪ Стрик: ${currentUser.streak} дней. Заходи сыграть!`;
@@ -719,7 +849,14 @@
         achievementCatalog = state.achievementCatalog;
       }
       updateHudFromState(state);
-      renderHome();
+
+      const params = new URLSearchParams(location.search);
+      const duelId = params.get("duel");
+      if (duelId) {
+        await renderDuelInvite(duelId);
+      } else {
+        renderHome();
+      }
     } catch (err) {
       showOverlay({ title: "Не удалось подключиться", text: "Попробуй перезайти в игру через кнопку бота.", });
     }

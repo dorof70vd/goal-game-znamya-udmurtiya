@@ -159,11 +159,121 @@ app.post("/api/match/result", (req, res) => {
   }
 });
 
+// --- Дуэли (вызов друга по ссылке) --------------------------------------
+
+app.post("/api/duel/create", (req, res) => {
+  const tgUser = authOrFail(req, res);
+  if (!tgUser) return;
+  const now = Date.now();
+  const name = tgUser.first_name || tgUser.username || "Игрок";
+  const duel = logic.createDuel(tgUser.id, name, now);
+  db.saveDuel(duel);
+  const shareUrl = botUsername ? `https://t.me/${botUsername}?start=duel_${duel.id}` : null;
+  res.json({
+    duelId: duel.id,
+    shareUrl,
+    shotsPerDuel: duel.shotsPerDuel,
+    difficulty: logic.getDuelDifficulty(),
+  });
+});
+
+app.post("/api/duel/info", (req, res) => {
+  const tgUser = authOrFail(req, res);
+  if (!tgUser) return;
+  const { duelId } = req.body || {};
+  const duel = db.getDuel(duelId);
+  if (!duel) {
+    return res.status(404).json({ error: "DUEL_NOT_FOUND" });
+  }
+  const role = logic.roleForUser(duel, tgUser.id);
+  const finished = duel.creatorGoals != null && duel.opponentGoals != null;
+  const alreadyPlayed =
+    role === "creator" ? duel.creatorGoals != null : role === "opponent" ? duel.opponentGoals != null : false;
+  res.json({
+    duelId: duel.id,
+    creatorName: duel.creatorName,
+    opponentName: duel.opponentName,
+    shotsPerDuel: duel.shotsPerDuel,
+    difficulty: logic.getDuelDifficulty(),
+    role,
+    finished,
+    alreadyPlayed,
+    creatorGoals: finished ? duel.creatorGoals : null,
+    opponentGoals: finished ? duel.opponentGoals : null,
+  });
+});
+
+app.post("/api/duel/start", (req, res) => {
+  const tgUser = authOrFail(req, res);
+  if (!tgUser) return;
+  const { duelId } = req.body || {};
+  const duel = db.getDuel(duelId);
+  if (!duel) {
+    return res.status(404).json({ error: "DUEL_NOT_FOUND" });
+  }
+  const name = tgUser.first_name || tgUser.username || "Соперник";
+  try {
+    const { token, role } = logic.startDuelAttempt(duel, tgUser.id, name);
+    db.saveDuel(duel);
+    res.json({ token, role, shotsPerDuel: duel.shotsPerDuel, difficulty: logic.getDuelDifficulty() });
+  } catch (err) {
+    res.status(409).json({ error: err.message });
+  }
+});
+
+app.post("/api/duel/result", async (req, res) => {
+  const tgUser = authOrFail(req, res);
+  if (!tgUser) return;
+  const { duelId, token, goals } = req.body || {};
+  const duel = db.getDuel(duelId);
+  if (!duel) {
+    return res.status(404).json({ error: "DUEL_NOT_FOUND" });
+  }
+  let outcome;
+  try {
+    outcome = logic.submitDuelResult(duel, tgUser.id, token, Number(goals), Date.now());
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  db.saveDuel(duel);
+
+  if (outcome.finished && !duel.notified && bot) {
+    duel.notified = true;
+    db.saveDuel(duel);
+    const summary =
+      outcome.winner === "draw"
+        ? `Ничья! ${duel.creatorName} — ${duel.creatorGoals}, ${duel.opponentName} — ${duel.opponentGoals}.`
+        : `Победитель — ${outcome.winner === "creator" ? duel.creatorName : duel.opponentName}! ` +
+          `${duel.creatorName} — ${duel.creatorGoals}, ${duel.opponentName} — ${duel.opponentGoals}.`;
+    const text = `⚔️ Дуэль завершена!\n${summary}`;
+    try {
+      await bot.api.sendMessage(duel.creatorId, text);
+    } catch (_) {
+      /* пользователь мог не начинать чат с ботом — ничего страшного */
+    }
+    if (duel.opponentId) {
+      try {
+        await bot.api.sendMessage(duel.opponentId, text);
+      } catch (_) {}
+    }
+  }
+
+  res.json({
+    ...outcome,
+    creatorName: duel.creatorName,
+    opponentName: duel.opponentName,
+    creatorGoals: duel.creatorGoals,
+    opponentGoals: duel.opponentGoals,
+  });
+});
+
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
 // --- Telegram-бот --------------------------------------------------------
 
 let bot = null;
+let botUsername = null; // подтягивается при старте — нужен для ссылок-приглашений на дуэль
+
 if (BOT_TOKEN) {
   bot = new Bot(BOT_TOKEN);
 
@@ -174,12 +284,31 @@ if (BOT_TOKEN) {
       );
       return;
     }
+
+    // Диплинк-приглашение на дуэль: t.me/<bot>?start=duel_<id>
+    const payload = (ctx.match || "").trim();
+    if (payload.startsWith("duel_")) {
+      const duelId = payload.slice("duel_".length);
+      const duel = db.getDuel(duelId);
+      if (!duel) {
+        await ctx.reply("Эта дуэль не найдена — возможно, ссылка устарела. Попроси прислать новую.");
+        return;
+      }
+      const duelKeyboard = new InlineKeyboard().webApp("⚔️ Принять вызов", `${PUBLIC_URL}/?duel=${duelId}`);
+      await ctx.reply(
+        `${duel.creatorName} вызывает тебя на дуэль в «Забей гол»! ⚔️\n\n` +
+          `${duel.shotsPerDuel} ударов, у обоих одинаковый вратарь — честная игра. Го?`,
+        { reply_markup: duelKeyboard }
+      );
+      return;
+    }
+
     const keyboard = new InlineKeyboard().webApp("⚽ Забить гол", `${PUBLIC_URL}/`);
     await ctx.reply(
       `${CLUB_NAME} приглашает сыграть! ⚪🔴\n\n` +
         `Проходи по очереди настоящих соперников лиги — где-то забивай голы вратарю ⚽, ` +
         `а где-то сам встань в ворота и отражай броски 🧤. Копи очки, держи стрик и открывай значки.\n` +
-        `Энергия восстанавливается сама — заходи почаще!`,
+        `Энергия восстанавливается сама — заходи почаще! А ещё можно вызвать друга на дуэль прямо из игры.`,
       { reply_markup: keyboard }
     );
   });
@@ -240,6 +369,12 @@ if (BOT_TOKEN) {
 
 async function main() {
   if (bot) {
+    try {
+      const me = await bot.api.getMe();
+      botUsername = me.username;
+    } catch (err) {
+      console.error("Не удалось узнать username бота (ссылки на дуэль не будут работать):", err);
+    }
     if (PUBLIC_URL) {
       // Продакшен-режим: вебхук — экономичнее для бесплатных хостингов,
       // которые "усыпляют" сервис при простое (Render free tier и т.п.).

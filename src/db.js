@@ -19,20 +19,25 @@ function ensureDataDir() {
   }
 }
 
+function emptyState() {
+  return { users: {}, settings: { matchDayKey: null }, duels: {} };
+}
+
 function loadRaw() {
   ensureDataDir();
   if (!fs.existsSync(DB_FILE)) {
-    return { users: {}, settings: { matchDayKey: null } };
+    return emptyState();
   }
   try {
     const raw = fs.readFileSync(DB_FILE, "utf8");
-    if (!raw.trim()) return { users: {}, settings: { matchDayKey: null } };
+    if (!raw.trim()) return emptyState();
     const parsed = JSON.parse(raw);
     if (!parsed.settings) parsed.settings = { matchDayKey: null };
+    if (!parsed.duels) parsed.duels = {};
     return parsed;
   } catch (err) {
     console.error("Не удалось прочитать db.json, начинаю с чистого состояния:", err);
-    return { users: {}, settings: { matchDayKey: null } };
+    return emptyState();
   }
 }
 
@@ -112,6 +117,15 @@ function setMatchDay(dateKeyOrNull) {
   persist();
 }
 
+function getDuel(id) {
+  return state.duels[id] || null;
+}
+
+function saveDuel(duel) {
+  state.duels[duel.id] = duel;
+  persist();
+}
+
 module.exports = {
   getUser,
   getOrCreateUser,
@@ -119,4 +133,6 @@ module.exports = {
   getAllUsers,
   getSettings,
   setMatchDay,
+  getDuel,
+  saveDuel,
 };

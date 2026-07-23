@@ -336,4 +336,61 @@ check("без смены уровня сложности флаг tierChanged н
   assert.strictEqual(res.tierName, "Лёгкий");
 });
 
+check("дуэль создаётся с фиксированной сложностью и без соперника", () => {
+  const duel = logic.createDuel("100", "Вадим", Date.now());
+  assert.strictEqual(duel.creatorId, "100");
+  assert.strictEqual(duel.opponentId, null);
+  assert.strictEqual(duel.shotsPerDuel, logic.DUEL_SHOTS);
+});
+
+check("создатель дуэли определяется как creator, второй как opponent-candidate", () => {
+  const duel = logic.createDuel("100", "Вадим");
+  assert.strictEqual(logic.roleForUser(duel, "100"), "creator");
+  assert.strictEqual(logic.roleForUser(duel, "200"), "opponent-candidate");
+});
+
+check("третий человек, зашедший по ссылке, становится зрителем", () => {
+  const duel = logic.createDuel("100", "Вадим");
+  logic.startDuelAttempt(duel, "200", "Кирилл"); // занимает место opponent
+  assert.strictEqual(logic.roleForUser(duel, "300"), "spectator");
+  assert.throws(() => logic.startDuelAttempt(duel, "300", "Андрей"), /DUEL_FULL/);
+});
+
+check("оба играют свою попытку — победитель определяется по числу голов", () => {
+  const duel = logic.createDuel("100", "Вадим");
+  const now = Date.now();
+  const { token: t1 } = logic.startDuelAttempt(duel, "100", "Вадим", now);
+  const r1 = logic.submitDuelResult(duel, "100", t1, 12, now + 1000);
+  assert.strictEqual(r1.finished, false); // соперник ещё не играл
+
+  const { token: t2 } = logic.startDuelAttempt(duel, "200", "Кирилл", now + 2000);
+  const r2 = logic.submitDuelResult(duel, "200", t2, 15, now + 3000);
+  assert.strictEqual(r2.finished, true);
+  assert.strictEqual(r2.winner, "opponent"); // у Кирилла больше голов
+});
+
+check("ничья в дуэли определяется корректно", () => {
+  const duel = logic.createDuel("100", "Вадим");
+  const now = Date.now();
+  const { token: t1 } = logic.startDuelAttempt(duel, "100", "Вадим", now);
+  logic.submitDuelResult(duel, "100", t1, 10, now);
+  const { token: t2 } = logic.startDuelAttempt(duel, "200", "Кирилл", now);
+  const r2 = logic.submitDuelResult(duel, "200", t2, 10, now);
+  assert.strictEqual(r2.winner, "draw");
+});
+
+check("нельзя сыграть в дуэли дважды за одну и ту же роль", () => {
+  const duel = logic.createDuel("100", "Вадим");
+  const now = Date.now();
+  const { token } = logic.startDuelAttempt(duel, "100", "Вадим", now);
+  logic.submitDuelResult(duel, "100", token, 5, now);
+  assert.throws(() => logic.startDuelAttempt(duel, "100", "Вадим", now + 1000), /ALREADY_PLAYED/);
+});
+
+check("неверный токен дуэли отклоняется", () => {
+  const duel = logic.createDuel("100", "Вадим");
+  logic.startDuelAttempt(duel, "100", "Вадим");
+  assert.throws(() => logic.submitDuelResult(duel, "100", "чужой-токен", 5), /INVALID_DUEL_TOKEN/);
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);

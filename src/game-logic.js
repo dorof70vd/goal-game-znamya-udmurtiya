@@ -314,6 +314,103 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
   };
 }
 
+// ------------------------- Дуэли (вызов друга по ссылке) -------------------
+//
+// Асинхронный формат: один игрок создаёт дуэль и играет свою попытку, когда
+// удобно; ссылку отправляет другу, тот играет свою попытку отдельно, когда
+// удобно ему. Как только оба сыграли — оба узнают результат. Сложность
+// фиксированная и одинаковая для обоих — чтобы было честно, независимо от
+// того, кто на каком уровне в основной кампании.
+
+const DUEL_SHOTS = 20;
+const DUEL_DIFFICULTY_LEVEL = 15; // фиксированный уровень сложности ("Средний") для обоих игроков
+
+function getDuelDifficulty() {
+  return getKeeperDifficulty(DUEL_DIFFICULTY_LEVEL);
+}
+
+function createDuel(creatorId, creatorName, now = Date.now()) {
+  const id = `${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    id,
+    creatorId: String(creatorId),
+    creatorName: creatorName || "Игрок",
+    opponentId: null,
+    opponentName: null,
+    shotsPerDuel: DUEL_SHOTS,
+    creatorGoals: null,
+    opponentGoals: null,
+    creatorToken: null,
+    opponentToken: null,
+    notified: false,
+    createdAt: now,
+  };
+}
+
+/** Кем приходится userId этой дуэли: 'creator' | 'opponent' | 'opponent-candidate' (место ещё свободно) | 'spectator'. */
+function roleForUser(duel, userId) {
+  const uid = String(userId);
+  if (uid === duel.creatorId) return "creator";
+  if (duel.opponentId && uid === duel.opponentId) return "opponent";
+  if (!duel.opponentId) return "opponent-candidate";
+  return "spectator";
+}
+
+/** Выдаёт токен на попытку в дуэли. Мутирует duel (может занять место "opponent"). */
+function startDuelAttempt(duel, userId, userName, now = Date.now()) {
+  const role = roleForUser(duel, userId);
+  if (role === "spectator") {
+    throw new Error("DUEL_FULL");
+  }
+  if (role === "creator" && duel.creatorGoals != null) {
+    throw new Error("ALREADY_PLAYED");
+  }
+  if ((role === "opponent" || role === "opponent-candidate") && duel.opponentGoals != null) {
+    throw new Error("ALREADY_PLAYED");
+  }
+  if (role === "opponent-candidate") {
+    duel.opponentId = String(userId);
+    duel.opponentName = userName || "Соперник";
+  }
+  const finalRole = role === "opponent-candidate" ? "opponent" : role;
+  const token = `${duel.id}.${finalRole}.${now}.${Math.random().toString(36).slice(2, 8)}`;
+  if (finalRole === "creator") {
+    duel.creatorToken = token;
+  } else {
+    duel.opponentToken = token;
+  }
+  return { token, role: finalRole };
+}
+
+/**
+ * Принимает результат попытки в дуэли. Мутирует duel.
+ * Возвращает { role, finished, winner } — winner: 'creator' | 'opponent' | 'draw' | null (пока не оба сыграли).
+ */
+function submitDuelResult(duel, userId, token, goals, now = Date.now()) {
+  const role = roleForUser(duel, userId);
+  if (role !== "creator" && role !== "opponent") {
+    throw new Error("NOT_IN_DUEL");
+  }
+  const expectedToken = role === "creator" ? duel.creatorToken : duel.opponentToken;
+  if (!expectedToken || expectedToken !== token) {
+    throw new Error("INVALID_DUEL_TOKEN");
+  }
+  const safeGoals = Math.max(0, Math.min(duel.shotsPerDuel, Math.round(goals)));
+  if (role === "creator") {
+    duel.creatorGoals = safeGoals;
+  } else {
+    duel.opponentGoals = safeGoals;
+  }
+  const finished = duel.creatorGoals != null && duel.opponentGoals != null;
+  let winner = null;
+  if (finished) {
+    if (duel.creatorGoals > duel.opponentGoals) winner = "creator";
+    else if (duel.opponentGoals > duel.creatorGoals) winner = "opponent";
+    else winner = "draw";
+  }
+  return { role, finished, winner };
+}
+
 function buildLeaderboard(users, now = Date.now(), limit = 20) {
   const curWeek = weekKey(now);
   const withCurrentWeek = users.map((u) => ({
@@ -346,6 +443,8 @@ module.exports = {
   OPPONENTS,
   ACHIEVEMENTS,
   DIFFICULTY_TIERS,
+  DUEL_SHOTS,
+  DUEL_DIFFICULTY_LEVEL,
   dateKey,
   weekKey,
   applyEnergyRegen,
@@ -363,5 +462,10 @@ module.exports = {
   canStartMatch,
   startMatch,
   submitMatchResult,
+  getDuelDifficulty,
+  createDuel,
+  roleForUser,
+  startDuelAttempt,
+  submitDuelResult,
   buildLeaderboard,
 };
