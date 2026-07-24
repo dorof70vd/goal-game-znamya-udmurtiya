@@ -1079,10 +1079,12 @@
         text,
         btnLabel: (currentUser.matchDayActive || currentUser.energy >= 1) ? "Играть ещё" : undefined,
         btn2Label: "Поделиться результатом",
-        btn3Label: "🏅 Достижения",
+        btn3Label: "Поделиться ВКонтакте",
+        btn4Label: "🏅 Достижения",
         onBtn: startMatchFlow,
         onBtn2: shareResult,
-        onBtn3: showAchievements,
+        onBtn3: shareResultToVk,
+        onBtn4: showAchievements,
       });
       if (!currentUser.matchDayActive && currentUser.energy < 1) {
         setTimeout(renderHome, 50);
@@ -1217,6 +1219,8 @@
           onBtn: renderHome,
           btn2Label: "Поделиться результатом",
           onBtn2: () => shareDuelResult(res),
+          btn3Label: "Поделиться ВКонтакте",
+          onBtn3: () => shareDuelResultToVk(res),
         });
       } else {
         showOverlay({ title, text, btnLabel: "На главный экран", onBtn: renderHome });
@@ -1364,6 +1368,18 @@
     });
   }
 
+  /** Загружает картинку-карточку на сервер и возвращает временную публичную ссылку на неё (или null). */
+  async function uploadShareCard(blob) {
+    if (!blob) return null;
+    try {
+      const dataUrl = await blobToDataUrl(blob);
+      const res = await api("/api/share-card", { imageBase64: dataUrl });
+      return res.url || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /** Пытается поделиться картинкой (нативный шаринг файла, иначе — через ссылку на сервере). Возвращает true, если получилось. */
   async function shareCardImage(blob, textCaption) {
     if (!blob) return false;
@@ -1377,17 +1393,16 @@
       /* пользователь отменил или платформа не поддерживает шаринг файлов — пробуем запасной вариант */
     }
     try {
-      const dataUrl = await blobToDataUrl(blob);
-      const res = await api("/api/share-card", { imageBase64: dataUrl });
-      if (res.url) {
+      const url = await uploadShareCard(blob);
+      if (url) {
         if (tg && tg.shareToStory) {
-          tg.shareToStory(res.url, { text: textCaption });
+          tg.shareToStory(url, { text: textCaption });
           return true;
         }
         if (tg && tg.openLink) {
-          tg.openLink(res.url);
+          tg.openLink(url);
         } else {
-          window.open(res.url, "_blank");
+          window.open(url, "_blank");
         }
         return true;
       }
@@ -1395,6 +1410,60 @@
       /* не получилось — упадём в текстовый шаринг ниже */
     }
     return false;
+  }
+
+  /**
+   * Открывает диалог "Поделиться" ВКонтакте с готовым текстом и картинкой —
+   * в отличие от общей кнопки "Поделиться результатом" (которая может увести
+   * в системное меню шаринга или, если оно недоступно, просто открыть картинку
+   * в новой вкладке без всякого контекста), эта кнопка ведёт именно туда, куда
+   * ожидает игрок: в форму репоста ВКонтакте, с описанием и ссылкой на игру.
+   */
+  function openVkShare(text, imageUrl) {
+    const linkUrl = `${location.origin}/`;
+    const params = new URLSearchParams({
+      url: linkUrl,
+      title: "«Забей гол» — ХК «Знамя-Удмуртия»",
+      description: text,
+      noparse: "true",
+    });
+    if (imageUrl) params.set("image", imageUrl);
+    const shareUrl = `https://vk.com/share.php?${params.toString()}`;
+    if (tg && tg.openLink) {
+      tg.openLink(shareUrl);
+    } else {
+      window.open(shareUrl, "_blank");
+    }
+  }
+
+  async function shareResultToVk() {
+    const verb = lastPlayedMode === "defense" ? "Отразил" : "Забил";
+    const text = `${verb} ${successCount} из ${match ? match.shotsPerMatch : 5} в игре «Забей гол» ХК «Знамя-Удмуртия» 🔴⚪ Стрик: ${currentUser.streak} дней. Заходи сыграть!`;
+    let imageUrl = null;
+    try {
+      const scoreLine = `${successCount}/${match ? match.shotsPerMatch : 5}`;
+      const subtitle = lastPlayedMode === "defense" ? "отражено в режиме «Вратарь»" : "голов забито вратарю";
+      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "Заходи сыграть — «Забей гол»" });
+      imageUrl = await uploadShareCard(blob);
+    } catch (_) {
+      /* не вышло с картинкой — поделимся хотя бы текстом и ссылкой */
+    }
+    openVkShare(text, imageUrl);
+  }
+
+  async function shareDuelResultToVk(res) {
+    const subtitle =
+      res.winner === "draw" ? "Ничья в дуэли!" : `Победил ${res.winner === "creator" ? res.creatorName : res.opponentName}`;
+    const text = `⚔️ Дуэль в «Забей гол»: ${res.creatorName} — ${res.creatorGoals}, ${res.opponentName} — ${res.opponentGoals}. ${subtitle}`;
+    let imageUrl = null;
+    try {
+      const scoreLine = `${res.creatorGoals} : ${res.opponentGoals}`;
+      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "⚔️ Вызови друга на дуэль!" });
+      imageUrl = await uploadShareCard(blob);
+    } catch (_) {
+      /* не вышло с картинкой — поделимся хотя бы текстом и ссылкой */
+    }
+    openVkShare(text, imageUrl);
   }
 
   async function shareResult() {
