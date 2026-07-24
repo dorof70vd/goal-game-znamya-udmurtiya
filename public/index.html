@@ -27,16 +27,26 @@
     display: flex; align-items: center; justify-content: space-between;
     color: white; text-shadow: 0 1px 2px rgba(0,0,0,.4);
   }
-  header .club { display:flex; align-items:center; gap:8px; font-weight:700; font-size: 15px; }
-  .crest { height: 34px; width: auto; display:block; filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
-  #rulesBtn, #exitBtn {
+  header .club { display:flex; align-items:center; gap:8px; font-weight:700; font-size: 15px; min-width: 0; }
+  header .club span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crest { height: 34px; width: auto; display:block; flex-shrink: 0; filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+  #rulesBtn {
     border: 2px solid rgba(255,255,255,.7); background: rgba(0,0,0,.25); color: white;
     border-radius: 50%; width: 30px; height: 30px; font-size: 15px; font-weight: 700;
     cursor: pointer; flex-shrink: 0; line-height: 1;
   }
   #rulesBtn:active, #exitBtn:active { transform: scale(0.94); }
-  #exitBtn { display: none; } /* показываем только вне Telegram — там уже есть свой "Закрыть" */
-  .header-icons { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  /* Кнопка выхода — не просто иконка, а иконка+подпись и яркий цвет, чтобы сразу
+     читалось как "выйти", а не как ещё одна кнопка меню. Показываем только вне
+     Telegram — там уже есть свой системный "Закрыть". */
+  #exitBtn {
+    display: none; align-items: center; gap: 4px; border: none;
+    background: linear-gradient(135deg, #e2574c, #b8231f); color: white;
+    border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 700;
+    cursor: pointer; flex-shrink: 0; line-height: 1; white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0,0,0,.3);
+  }
+  .header-icons { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
   .stat-row { display:flex; gap: 10px; font-size: 12px; }
   .stat { background: rgba(0,0,0,.25); border-radius: 10px; padding: 3px 8px; }
 
@@ -91,7 +101,7 @@
     <header>
       <div class="club"><img class="crest" src="assets/logo.png" alt="Знамя-Удмуртия" /><span>Забей гол — Знамя-Удмуртия</span></div>
       <div class="header-icons">
-        <button id="exitBtn" title="Выйти из игры">🚪</button>
+        <button id="exitBtn" title="Выйти из игры">🚪 Выход</button>
         <button id="rulesBtn" title="Правила игры">❓</button>
       </div>
     </header>
