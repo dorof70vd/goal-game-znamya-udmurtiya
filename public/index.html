@@ -5,7 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
 <title>Забей гол — Знамя-Удмуртия</title>
 <link rel="icon" type="image/png" href="assets/favicon.png" />
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!-- defer: без него браузер останавливает разбор всей страницы, пока не
+     скачает этот скрипт со стороннего домена telegram.org — если для
+     какого-то браузера/сети этот конкретный домен отвечает медленно (у
+     Chrome и Safari бывают разные пути DNS/сети), вся страница как будто
+     "зависает", хотя наш собственный сервер уже давно всё отдал. -->
+<script src="https://telegram.org/js/telegram-web-app.js" defer></script>
 <style>
   :root {
     --club-red: #c1272d;
@@ -135,6 +140,8 @@
     <footer id="footerText">Зажми и веди пальцем, чтобы прицелиться — отпусти, чтобы ударить.</footer>
   </div>
 
-<script src="game.js"></script>
+<!-- тоже defer — чтобы порядок выполнения (сначала Telegram SDK, потом наш
+     код) сохранился, раз оба скрипта теперь не блокируют парсинг страницы. -->
+<script src="game.js" defer></script>
 </body>
 </html>
