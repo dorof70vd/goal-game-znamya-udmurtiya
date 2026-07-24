@@ -497,4 +497,60 @@ check("buildStats считает игроков по источнику вход
   assert.strictEqual(stats.topActive[0].name, "Старичок"); // больше всех голов
 });
 
+check("ensureCurrentDay замораживает вчерашний итог и обнуляет счёт нового дня", () => {
+  const day1 = Date.parse("2026-07-20T10:00:00Z"); // с учётом CLUB_UTC_OFFSET_HOURS это всё ещё 20-е число
+  const u = freshUser({ dayGoals: 0, dayKey: null, prevDayGoals: 0, prevDayKey: null });
+  logic.ensureCurrentDay(u, day1);
+  assert.strictEqual(u.dayKey, logic.dateKey(day1));
+  assert.strictEqual(u.dayGoals, 0);
+  assert.strictEqual(u.prevDayKey, null); // это был самый первый визит — вчера ещё не было
+
+  u.dayGoals = 4; // как будто за день забил 4 гола
+  const day2 = day1 + 26 * 60 * 60 * 1000; // на следующий клубный день
+  logic.ensureCurrentDay(u, day2);
+  assert.strictEqual(u.dayKey, logic.dateKey(day2));
+  assert.strictEqual(u.dayGoals, 0); // счётчик нового дня обнулён
+  assert.strictEqual(u.prevDayKey, logic.dateKey(day1)); // а итог прошлого дня заморожен
+  assert.strictEqual(u.prevDayGoals, 4);
+
+  // Повторный вызов в тот же день ничего не портит (идемпотентность).
+  logic.ensureCurrentDay(u, day2 + 60 * 1000);
+  assert.strictEqual(u.prevDayGoals, 4);
+});
+
+check("submitMatchResult копит dayGoals так же, как weekGoals/totalGoals", () => {
+  const now = Date.now();
+  const u = freshUser({ energy: 5, maxEnergy: 5, level: 5 });
+  const token = logic.startMatch(u, now);
+  const res = logic.submitMatchResult(u, token, 3, now);
+  assert.strictEqual(res.goals, 3);
+  assert.strictEqual(u.dayGoals, 3);
+  assert.strictEqual(u.dayKey, logic.dateKey(now));
+});
+
+check("buildDailyLeaders находит вчерашнего лидера по числу голов", () => {
+  const now = Date.now();
+  const yKey = logic.yesterdayKey(now);
+  const users = [
+    freshUser({ id: "111", firstName: "Первый", prevDayKey: yKey, prevDayGoals: 7 }),
+    freshUser({ id: "222", firstName: "Второй", prevDayKey: yKey, prevDayGoals: 12 }),
+    freshUser({ id: "333", firstName: "Позавчерашний", prevDayKey: "2000-01-01", prevDayGoals: 999 }),
+    freshUser({ id: "444", firstName: "Ноль", prevDayKey: yKey, prevDayGoals: 0 }),
+  ];
+  const top1 = logic.buildDailyLeaders(users, now, 1);
+  assert.strictEqual(top1.length, 1);
+  assert.strictEqual(top1[0].id, "222");
+  assert.strictEqual(top1[0].goals, 12);
+  assert.strictEqual(top1[0].dayKey, yKey);
+
+  const top3 = logic.buildDailyLeaders(users, now, 3);
+  assert.deepStrictEqual(top3.map((l) => l.id), ["222", "111"]); // "444" с нулём голов и "333" со старым днём не входят
+});
+
+check("buildDailyLeaders возвращает пустой список, если вчера никто не играл", () => {
+  const now = Date.now();
+  const users = [freshUser({ id: "1", prevDayKey: "2000-01-01", prevDayGoals: 5 })];
+  assert.deepStrictEqual(logic.buildDailyLeaders(users, now, 1), []);
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);

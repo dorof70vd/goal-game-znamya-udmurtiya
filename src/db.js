@@ -20,7 +20,7 @@ function ensureDataDir() {
 }
 
 function emptyState() {
-  return { users: {}, settings: { matchDayKey: null }, duels: {} };
+  return { users: {}, settings: { matchDayKey: null, lastLeaderNotifyDayKey: null }, duels: {} };
 }
 
 function loadRaw() {
@@ -32,7 +32,8 @@ function loadRaw() {
     const raw = fs.readFileSync(DB_FILE, "utf8");
     if (!raw.trim()) return emptyState();
     const parsed = JSON.parse(raw);
-    if (!parsed.settings) parsed.settings = { matchDayKey: null };
+    if (!parsed.settings) parsed.settings = { matchDayKey: null, lastLeaderNotifyDayKey: null };
+    if (parsed.settings.lastLeaderNotifyDayKey === undefined) parsed.settings.lastLeaderNotifyDayKey = null;
     if (!parsed.duels) parsed.duels = {};
     return parsed;
   } catch (err) {
@@ -83,6 +84,11 @@ function getOrCreateUser(telegramId, profile = {}) {
       totalGoals: 0,
       weekGoals: 0,
       weekKey: null, // "YYYY-Www"
+      dayGoals: 0,
+      dayKey: null, // "YYYY-MM-DD" — текущий клубный день
+      prevDayGoals: 0, // "замороженный" итог прошлого дня (см. ensureCurrentDay в game-logic.js)
+      prevDayKey: null,
+      leaderBannerShownForDay: null, // чтобы баннер "ты был лидером дня" показался в игре только один раз
       achievements: [], // id значков (см. game-logic.js ACHIEVEMENTS)
       createdAt: Date.now(),
     };
@@ -124,6 +130,12 @@ function setMatchDay(dateKeyOrNull) {
   persist();
 }
 
+/** Отмечает, что рассылка "ты был лидером дня" за этот клубный день уже отправлена — чтобы не дублировать. */
+function setLastLeaderNotifyDayKey(dateKey) {
+  state.settings.lastLeaderNotifyDayKey = dateKey;
+  persist();
+}
+
 function getDuel(id) {
   return state.duels[id] || null;
 }
@@ -144,6 +156,7 @@ module.exports = {
   getAllUsers,
   getSettings,
   setMatchDay,
+  setLastLeaderNotifyDayKey,
   getDuel,
   saveDuel,
   getAllDuels,

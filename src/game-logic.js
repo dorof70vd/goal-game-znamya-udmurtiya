@@ -246,6 +246,57 @@ function ensureCurrentWeek(user, now = Date.now()) {
   return user;
 }
 
+/**
+ * Ключ "вчерашнего" клубного дня — основа для утренней рассылки/баннера
+ * "ты был лидером дня" (см. buildDailyLeaders ниже). В клубной таймзоне нет
+ * перехода на летнее время, поэтому вычитание ровно 24 часов безопасно.
+ */
+function yesterdayKey(now = Date.now()) {
+  return dateKey(now - 24 * 60 * 60 * 1000);
+}
+
+/**
+ * Сбрасывает дневной счёт голов при наступлении нового клубного дня —
+ * ровно как ensureCurrentWeek, но дополнительно "замораживает" итог только
+ * что закончившегося дня в prevDayGoals/prevDayKey. Эта заморозка происходит
+ * один раз, в первый же вызов после полуночи (по времени клуба), и именно она
+ * используется потом как "результат вчерашнего дня" — buildDailyLeaders
+ * смотрит только на prevDayGoals/prevDayKey, а не на "живой" dayGoals,
+ * который к этому моменту уже обнулён для нового дня. Мутирует user.
+ */
+function ensureCurrentDay(user, now = Date.now()) {
+  const curDay = dateKey(now);
+  if (user.dayKey !== curDay) {
+    user.prevDayKey = user.dayKey || null;
+    user.prevDayGoals = user.dayKey ? user.dayGoals || 0 : 0;
+    user.dayKey = curDay;
+    user.dayGoals = 0;
+  }
+  return user;
+}
+
+/**
+ * Топ игроков по голам за ВЧЕРА (по клубному дню) — те самые "лидеры дня",
+ * которым на следующий день можно напомнить сыграть ещё (в Telegram — личным
+ * сообщением от бота, вне Telegram — баннером в самой игре при следующем
+ * заходе). Смотрит на "замороженный" итог прошлого дня (см. ensureCurrentDay),
+ * поэтому корректно работает в любой момент нового дня, даже после того как
+ * dayGoals уже обнулился на сегодня.
+ */
+function buildDailyLeaders(users, now = Date.now(), topN = 1) {
+  const yKey = yesterdayKey(now);
+  return users
+    .filter((u) => u.prevDayKey === yKey && (u.prevDayGoals || 0) > 0)
+    .sort((a, b) => (b.prevDayGoals || 0) - (a.prevDayGoals || 0))
+    .slice(0, topN)
+    .map((u) => ({
+      id: u.id,
+      name: u.firstName || u.username || "Болельщик",
+      goals: u.prevDayGoals,
+      dayKey: yKey,
+    }));
+}
+
 // Именные "этажи" сложности поверх уже существующей плавной прогрессии —
 // чтобы игроку было наглядно видно "я прошёл Лёгкий, играю на Среднем", а не
 // просто безликие цифры уровня. Прогресс между этажами остаётся автоматическим
@@ -309,8 +360,10 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
   const mode = match.mode || getModeForLevel(match.level || user.level);
 
   ensureCurrentWeek(user, now);
+  ensureCurrentDay(user, now);
   user.totalGoals += safeGoals;
   user.weekGoals += safeGoals;
+  user.dayGoals += safeGoals;
   user.bestScore = Math.max(user.bestScore, safeGoals);
 
   const perfect = safeGoals === SHOTS_PER_MATCH;
@@ -591,6 +644,9 @@ module.exports = {
   isMaxBonusAvailable,
   isMatchDayActive,
   ensureCurrentWeek,
+  ensureCurrentDay,
+  yesterdayKey,
+  buildDailyLeaders,
   getKeeperDifficulty,
   getDifficultyTierName,
   getOpponentName,

@@ -21,6 +21,14 @@ const ADMIN_IDS = (process.env.ADMIN_TELEGRAM_ID || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// Сколько игроков считаются "лидерами дня" и получают на следующий день
+// напоминание сыграть ещё (личным сообщением в Telegram или баннером в игре
+// для тех, кто зашёл не из Telegram). См. notifyDailyLeadersIfDue() ниже.
+const DAILY_LEADER_TOP_N = 1;
+// Час по времени клуба (UTC+4), после которого можно слать утреннюю рассылку —
+// чтобы не будить лидера дня посреди ночи.
+const DAILY_LEADER_NOTIFY_HOUR = 9;
+
 if (!BOT_TOKEN) {
   console.warn(
     "[WARN] BOT_TOKEN не задан. Сайт мини-аппа и API поднимутся, но бот работать не будет.\n" +
@@ -67,6 +75,7 @@ function authOrFail(req, res) {
 function serializeUser(user, now) {
   logic.applyEnergyRegen(user, now);
   logic.ensureCurrentWeek(user, now);
+  logic.ensureCurrentDay(user, now);
   const settings = db.getSettings();
   const matchDayActive = logic.isMatchDayActive(settings, now);
   return {
@@ -111,9 +120,32 @@ app.post("/api/auth", (req, res) => {
   });
 
   logic.applyEnergyRegen(user, now);
+  logic.ensureCurrentDay(user, now);
   const loginResult = logic.registerDailyLogin(user, now);
   logic.ensureCurrentWeek(user, now);
   const newAchievements = logic.checkAchievements(user, {});
+
+  // "Ты был лидером дня" — баннер в самой игре для тех, кто зашёл не из
+  // Telegram (им нельзя отправить личное сообщение — см. isWebGuestId).
+  // Telegram-игрокам это не нужно: они и так получают личное сообщение от
+  // бота (см. notifyDailyLeadersIfDue ниже) — показывать им баннер ещё раз
+  // было бы избыточно. Показывается ровно один раз благодаря
+  // leaderBannerShownForDay (тот же приём, что и у бонусов за подписки).
+  let leaderBanner = null;
+  const yKey = logic.yesterdayKey(now);
+  if (
+    logic.isWebGuestId(user.id) &&
+    user.leaderBannerShownForDay !== yKey &&
+    user.prevDayKey === yKey &&
+    (user.prevDayGoals || 0) > 0
+  ) {
+    const leaders = logic.buildDailyLeaders(db.getAllUsers(), now, DAILY_LEADER_TOP_N);
+    if (leaders.some((l) => l.id === user.id)) {
+      leaderBanner = { goals: user.prevDayGoals };
+      user.leaderBannerShownForDay = yKey;
+    }
+  }
+
   db.saveUser(user);
 
   res.json({
@@ -121,6 +153,7 @@ app.post("/api/auth", (req, res) => {
     dailyBonus: loginResult,
     newAchievements,
     achievementCatalog: logic.ACHIEVEMENTS,
+    leaderBanner,
   });
 });
 
@@ -530,6 +563,50 @@ if (BOT_TOKEN) {
   });
 }
 
+// Правильное русское склонение "гол/гола/голов" по числу.
+function goalsWord(n) {
+  const abs = Math.abs(Math.round(n)) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return "голов";
+  if (last === 1) return "гол";
+  if (last >= 2 && last <= 4) return "гола";
+  return "голов";
+}
+
+/**
+ * Раз в день (не раньше DAILY_LEADER_NOTIFY_HOUR по времени клуба) находит
+ * вчерашних "лидеров дня" (см. buildDailyLeaders в game-logic.js) и шлёт им
+ * личное сообщение от бота с призывом сыграть ещё. Работает только для
+ * Telegram-игроков — веб-гостям (VK/браузер) личное сообщение отправить
+ * нельзя, для них вместо этого показывается баннер в самой игре (см. /api/auth).
+ * lastLeaderNotifyDayKey в настройках защищает от повторной отправки в один
+ * и тот же день при каждом периодическом тике.
+ */
+async function notifyDailyLeadersIfDue(now = Date.now()) {
+  if (!bot) return;
+  const todayKey = logic.dateKey(now);
+  const settings = db.getSettings();
+  if (settings.lastLeaderNotifyDayKey === todayKey) return;
+
+  const clubHour = new Date(now + logic.CLUB_UTC_OFFSET_HOURS * 60 * 60 * 1000).getUTCHours();
+  if (clubHour < DAILY_LEADER_NOTIFY_HOUR) return;
+
+  const leaders = logic.buildDailyLeaders(db.getAllUsers(), now, DAILY_LEADER_TOP_N);
+  for (const leader of leaders) {
+    if (logic.isWebGuestId(leader.id)) continue; // им отправляется баннер в игре, не личное сообщение
+    try {
+      await bot.api.sendMessage(
+        leader.id,
+        `🔥 Вчера ты был лидером дня в «Забей гол» — ${leader.goals} ${goalsWord(leader.goals)}!\n\n` +
+          `Попробуй сегодня повторить или улучшить результат — заходи в игру.`
+      );
+    } catch (err) {
+      console.error(`Не удалось отправить напоминание лидеру дня (${leader.id}):`, err.message || err);
+    }
+  }
+  db.setLastLeaderNotifyDayKey(todayKey);
+}
+
 async function main() {
   if (bot) {
     try {
@@ -568,4 +645,17 @@ async function main() {
 
 main();
 
+// Проверяем раз в 10 минут — той же периодичности достаточно, точность в
+// пределах часа тут не критична, а внешний "будильник" (см. README), который
+// пингует /healthz, всё равно не даёт бесплатному хостингу уснуть в это время.
+if (bot) {
+  notifyDailyLeadersIfDue().catch((err) => console.error("Ошибка рассылки лидерам дня:", err));
+  setInterval(() => {
+    notifyDailyLeadersIfDue().catch((err) => console.error("Ошибка рассылки лидерам дня:", err));
+  }, 10 * 60 * 1000);
+}
+
 module.exports = app;
+// Дополнительно вешаем на экспорт сам джоб рассылки — нужно только для
+// тестов (см. test-daily-leaders.js), в проде используется app как обычно.
+module.exports.notifyDailyLeadersIfDue = notifyDailyLeadersIfDue;

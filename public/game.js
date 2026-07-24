@@ -1577,6 +1577,26 @@
 
   // ------------------------------- Запуск -------------------------------
 
+  // Склонение "гол/гола/голов" — для баннера "ты был лидером дня" (см. ниже).
+  function ruGoalsWord(n) {
+    const abs = Math.abs(Math.round(n)) % 100;
+    const last = abs % 10;
+    if (abs > 10 && abs < 20) return "голов";
+    if (last === 1) return "гол";
+    if (last >= 2 && last <= 4) return "гола";
+    return "голов";
+  }
+
+  async function goToStartScreen() {
+    const params = new URLSearchParams(location.search);
+    const duelId = params.get("duel");
+    if (duelId) {
+      await renderDuelInvite(duelId);
+    } else {
+      renderHome();
+    }
+  }
+
   async function init() {
     layout();
     // Заранее подгружаем герб клуба — нужен и для праздничного эффекта на
@@ -1592,13 +1612,21 @@
       }
       updateHudFromState(state);
 
-      const params = new URLSearchParams(location.search);
-      const duelId = params.get("duel");
-      if (duelId) {
-        await renderDuelInvite(duelId);
-      } else {
-        renderHome();
+      // "Ты был лидером дня" — показываем один раз при заходе тем, кто не из
+      // Telegram (Telegram-игрокам об этом уже написал бот личным сообщением).
+      // Сервер сам следит, чтобы это поле пришло ровно один раз (см. /api/auth).
+      if (state.leaderBanner) {
+        const n = state.leaderBanner.goals;
+        showOverlay({
+          title: "🔥 Ты был лидером дня!",
+          text: `Вчера ты забил больше всех — ${n} ${ruGoalsWord(n)}! Попробуй сегодня повторить или улучшить результат.`,
+          btnLabel: "Играть",
+          onBtn: goToStartScreen,
+        });
+        return;
       }
+
+      await goToStartScreen();
     } catch (err) {
       const reconnectHint = tg
         ? "Попробуй перезайти в игру через кнопку бота."
