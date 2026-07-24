@@ -24,6 +24,13 @@
 
   const initData = getInitData();
 
+  // Настоящий признак "мы внутри Telegram" — непустой tg.initData (см. также
+  // разбор в exitBtn ниже: window.Telegram.WebApp существует всегда, если
+  // скрипт telegram-web-app.js вообще смог загрузиться, даже вне Telegram).
+  function inTelegramApp() {
+    return !!(tg && tg.initData);
+  }
+
   // ------------------------- Гостевой веб-вход (без Telegram) --------------
   // Если игру открыли просто по ссылке (например, из поста ВКонтакте), у нас
   // нет Telegram-идентификатора. Заводим анонимный, привязанный к этому
@@ -645,7 +652,7 @@
   // случае, даже в обычном браузере — так что просто "tg существует" не годится
   // как признак "мы внутри Telegram". Настоящий признак — непустой tg.initData:
   // он появляется только при реальном запуске внутри Telegram-клиента.
-  if (!(tg && tg.initData)) {
+  if (!inTelegramApp()) {
     el.exitBtn.style.display = "flex";
     el.exitBtn.addEventListener("click", () => {
       try { window.close(); } catch (_) {}
@@ -1074,16 +1081,23 @@
         spawnBigCelebration();
       }
 
+      // Кнопку "Поделиться ВКонтакте" показываем только вне Telegram: у нас в
+      // Votkinsk многие заходят в Telegram через VPN, а VK у них работает
+      // только БЕЗ VPN — если открывать vk.com прямо из-под Telegram+VPN,
+      // ВКонтакте может повести себя странно или потребовать выключить VPN.
+      // Внутри Telegram делимся через его собственный, уже работающий канал
+      // (кнопка "Поделиться результатом" — история/чат/системное меню).
+      const canShareVk = !inTelegramApp();
       showOverlay({
         title,
         text,
         btnLabel: (currentUser.matchDayActive || currentUser.energy >= 1) ? "Играть ещё" : undefined,
         btn2Label: "Поделиться результатом",
-        btn3Label: "Поделиться ВКонтакте",
+        btn3Label: canShareVk ? "Поделиться ВКонтакте" : undefined,
         btn4Label: "🏅 Достижения",
         onBtn: startMatchFlow,
         onBtn2: shareResult,
-        onBtn3: shareResultToVk,
+        onBtn3: canShareVk ? shareResultToVk : undefined,
         onBtn4: showAchievements,
       });
       if (!currentUser.matchDayActive && currentUser.energy < 1) {
@@ -1212,6 +1226,10 @@
         text = `Ты выбил ${successCount} из ${match.shotsPerMatch}. Ждём, пока сыграет соперник — ${resultNotifyHint()}.`;
       }
       if (res.finished) {
+        // См. пояснение у экрана результата обычного матча — ВК-кнопку не
+        // показываем внутри Telegram из-за конфликта VPN (для Telegram) и
+        // прямого доступа (для VK) на одном и том же телефоне.
+        const canShareVk = !inTelegramApp();
         showOverlay({
           title,
           text,
@@ -1219,8 +1237,8 @@
           onBtn: renderHome,
           btn2Label: "Поделиться результатом",
           onBtn2: () => shareDuelResult(res),
-          btn3Label: "Поделиться ВКонтакте",
-          onBtn3: () => shareDuelResultToVk(res),
+          btn3Label: canShareVk ? "Поделиться ВКонтакте" : undefined,
+          onBtn3: canShareVk ? () => shareDuelResultToVk(res) : undefined,
         });
       } else {
         showOverlay({ title, text, btnLabel: "На главный экран", onBtn: renderHome });
