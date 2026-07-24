@@ -68,6 +68,7 @@
     overlayBtn7: document.getElementById("overlayBtn7"),
     overlayList: document.getElementById("overlayList"),
     rulesBtn: document.getElementById("rulesBtn"),
+    exitBtn: document.getElementById("exitBtn"),
     energyStat: document.getElementById("energyStat"),
     streakStat: document.getElementById("streakStat"),
     diffStat: document.getElementById("diffStat"),
@@ -634,6 +635,24 @@
   }
 
   el.rulesBtn.addEventListener("click", showRules);
+
+  // Кнопка "выйти" нужна только вне Telegram: там, где игру открыли по обычной
+  // ссылке (например, из ВК), у страницы нет своего системного "Закрыть" —
+  // в отличие от Telegram, который сам рисует такую кнопку в шапке мини-приложения.
+  if (!tg) {
+    el.exitBtn.style.display = "flex";
+    el.exitBtn.addEventListener("click", () => {
+      try { window.close(); } catch (_) {}
+      showOverlay({
+        title: "👋 Спасибо за игру!",
+        text:
+          "Эту страницу теперь можно закрыть как обычно — крестиком наверху экрана (если открыл из ВК или другого " +
+          "приложения) либо через список вкладок браузера. Заходи ещё!",
+        btnLabel: "Играть ещё",
+        onBtn: () => { if (currentUser) renderHome(); else hideOverlay(); },
+      });
+    });
+  }
 
   // ------------------------- Управление (pointer) -------------------------
 
