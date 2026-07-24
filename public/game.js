@@ -278,6 +278,7 @@
   let match = null; // { token, difficulty, shotsPerMatch, mode, opponentName }
   let duelContext = null; // { duelId, token, role } — заполняется, когда играем дуэль, а не обычный матч
   let trainingContext = null; // { mode, token } — заполняется во время тренировки (не влияет на прогресс)
+  let energyWaitPollTimer = null; // фоновая проверка на экране "Энергия закончилась" — вдруг админ включил день матча
   let currentMode = "attack"; // 'attack' | 'defense' — второй режим "Вратарь"
   let shotIndex = 0;
   let successCount = 0;
@@ -920,6 +921,48 @@
     });
   }
 
+  /** Заново спрашивает сервер про текущее состояние (энергию, день матча и т.д.) и перерисовывает главный экран. */
+  async function refreshHomeState() {
+    try {
+      const state = await api("/api/auth", {});
+      currentUser = state;
+      updateHudFromState(state);
+    } catch (_) {
+      /* сеть подвела — ничего страшного, экран просто останется как был */
+    }
+    renderHome();
+  }
+
+  /**
+   * Пока на экране висит "Энергия закончилась", тихо проверяем сервер каждые
+   * 20 секунд — вдруг администратор клуба включил безлимитный день матча
+   * (командой /matchday в боте). Как только лимит снят (или просто набежала
+   * энергия), сами перерисовываем главный экран — человеку не нужно ничего
+   * нажимать и тем более перезагружать страницу, чтобы это заметить.
+   */
+  function startEnergyWaitPoll() {
+    clearInterval(energyWaitPollTimer);
+    energyWaitPollTimer = setInterval(async () => {
+      // Если человек уже ушёл с этого экрана (нажал любую из кнопок ниже) —
+      // самоостанавливаемся, не дёргаем его обратно на главный экран.
+      if (!el.overlay || el.overlay.classList.contains("hidden") || el.overlayTitle.textContent !== "Энергия закончилась") {
+        clearInterval(energyWaitPollTimer);
+        return;
+      }
+      try {
+        const state = await api("/api/auth", {});
+        currentUser = state;
+        if (state.matchDayActive || state.energy >= 1) {
+          clearInterval(energyWaitPollTimer);
+          updateHudFromState(state);
+          renderHome();
+        }
+      } catch (_) {
+        /* не получилось — попробуем на следующем тике */
+      }
+    }, 20000);
+  }
+
   function renderHome() {
     if (!currentUser) return;
     const anyBonusAvailable = SOCIAL_BONUS_KINDS.some((k) => currentUser[`${k.kind}BonusAvailable`]);
@@ -938,7 +981,10 @@
       showOverlay({
         title: "Энергия закончилась",
         text: `Следующая попытка через ${fmtMs(currentUser.msUntilNextEnergy)}. Заходи завтра — получишь бонус за стрик!` +
-          (anyBonusAvailable ? " А пока можно забрать бонусы за подписки клуба." : ""),
+          (anyBonusAvailable ? " А пока можно забрать бонусы за подписки клуба." : "") +
+          " Если админ клуба включит безлимитный день матча — экран обновится сам, можно и не ждать.",
+        btnLabel: "🔄 Обновить",
+        onBtn: refreshHomeState,
         btn2Label: "Таблица лидеров",
         onBtn2: showLeaderboard,
         btn3Label: bonusBtn,
@@ -952,6 +998,7 @@
         btn7Label: "🎯 Тренировка",
         onBtn7: showTrainingMenu,
       });
+      startEnergyWaitPoll();
       return;
     }
     showOverlay({
