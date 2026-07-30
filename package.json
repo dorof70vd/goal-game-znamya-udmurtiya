@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node src/server.js",
-    "test": "node src/game-logic.test.js && node src/test-daily-leaders.js"
+    "test": "node src/game-logic.test.js && node src/test-daily-leaders.js && node src/test-referral-hof-contest.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

@@ -13,6 +13,20 @@ const MATCH_TOKEN_TTL_MS = 10 * 60 * 1000; // матч живёт максиму
 const NEWS_BONUS_ENERGY = 2;
 const NEWS_BONUS_CEILING_EXTRA = 2;
 
+// Реферальная механика — приглашение засчитывается ПОСТОЯННОЙ прибавкой к
+// максимуму энергии (а не разовым бонусом сверх потолка, как новость/VK/MAX
+// выше) — так игрок реально чувствует ценность приглашения, а не просто
+// "ещё немного попыток на сегодня". У инвайтера есть потолок (иначе в теории
+// можно бесконечно раздувать максимум фейковыми приглашениями), у нового
+// друга — разовая прибавка при первом входе.
+const REFERRAL_INVITER_ENERGY_BONUS = 1; // +1 к maxEnergy инвайтеру за каждого успешного друга
+const REFERRAL_INVITER_MAX_BONUSES = 4; // не больше 4 таких прибавок за всё время (потолок +4)
+const REFERRAL_INVITEE_ENERGY_BONUS = 1; // разовая прибавка тому, кого пригласили
+
+// Конкурс дня (с реальным призом от клуба) — фиксированное окно 24 часа с
+// момента, когда администратор его запускает командой /contest в боте.
+const CONTEST_DURATION_MS = 24 * 60 * 60 * 1000;
+
 // Клуб играет в зоне UTC+4 (Удмуртия/Самара) — считаем "новый день" и
 // "новую неделю" по этому смещению, а не по времени сервера.
 const CLUB_UTC_OFFSET_HOURS = 4;
@@ -60,6 +74,7 @@ const ACHIEVEMENTS = [
   { id: "level_max", title: "Чемпион сезона", desc: "Пройди весь список соперников." },
   { id: "goals_50", title: "Полсотни", desc: "Забей 50 голов всего (по всем матчам)." },
   { id: "goals_200", title: "Двести", desc: "Забей 200 голов всего (по всем матчам)." },
+  { id: "referral_1", title: "Заводила", desc: "Пригласи друга в игру по личной ссылке." },
 ];
 
 function ensureAchievements(user) {
@@ -101,6 +116,7 @@ function checkAchievements(user, matchInfo = {}) {
   if (user.level >= MAX_LEVEL) unlockAchievement(user, "level_max", newly);
   if (user.totalGoals >= 50) unlockAchievement(user, "goals_50", newly);
   if (user.totalGoals >= 200) unlockAchievement(user, "goals_200", newly);
+  if ((user.referralCount || 0) >= 1) unlockAchievement(user, "referral_1", newly);
 
   return newly;
 }
@@ -183,6 +199,9 @@ function registerDailyLogin(user, now = Date.now()) {
   }
   user.energy = Math.min(user.maxEnergy, user.energy + bonusEnergy);
   user.lastPlayedDate = todayKey;
+  // Текущий streak может потом упасть (пропустил день) — а bestStreak хранит
+  // рекорд навсегда, именно он и нужен "залу славы" (см. buildHallOfFame).
+  user.bestStreak = Math.max(user.bestStreak || 0, user.streak);
   return { streak: user.streak, bonusEnergy, isNewDay: true };
 }
 
@@ -234,6 +253,31 @@ function isMaxBonusAvailable(user, now = Date.now()) {
 /** Активен ли сегодня безлимитный режим (день настоящего матча клуба). */
 function isMatchDayActive(settings, now = Date.now()) {
   return Boolean(settings && settings.matchDayKey === dateKey(now));
+}
+
+/**
+ * Начисляет бонус за успешное приглашение друга. Мутирует ОБА объекта user.
+ * У инвайтера — постоянная прибавка к максимуму энергии с потолком
+ * REFERRAL_INVITER_MAX_BONUSES (после потолка достижение и счётчик всё равно
+ * растут — просто прибавка энергии больше не даётся); у приглашённого —
+ * разовая прибавка при первом входе. checkAchievements (вызывается отдельно,
+ * при следующей же сериализации инвайтера) сам выдаст значок "Заводила" по
+ * referralCount >= 1 — здесь только считаем цифры.
+ */
+function creditReferral(inviter, invitee, now = Date.now()) {
+  invitee.referredBy = inviter.id;
+  invitee.maxEnergy += REFERRAL_INVITEE_ENERGY_BONUS;
+  invitee.energy = Math.min(invitee.maxEnergy, invitee.energy + REFERRAL_INVITEE_ENERGY_BONUS);
+
+  const bonusesSoFar = inviter.referralCount || 0;
+  let inviterBonusApplied = false;
+  if (bonusesSoFar < REFERRAL_INVITER_MAX_BONUSES) {
+    inviter.maxEnergy += REFERRAL_INVITER_ENERGY_BONUS;
+    inviter.energy = Math.min(inviter.maxEnergy, inviter.energy + REFERRAL_INVITER_ENERGY_BONUS);
+    inviterBonusApplied = true;
+  }
+  inviter.referralCount = bonusesSoFar + 1;
+  return { inviterBonusApplied, referralCount: inviter.referralCount };
 }
 
 /** Сбрасывает недельный счёт, если наступила новая неделя. Мутирует user. */
@@ -529,12 +573,24 @@ function buildLeaderboard(users, now = Date.now(), limit = 20) {
   const byWeek = [...withCurrentWeek]
     .sort((a, b) => b.weekGoals - a.weekGoals)
     .slice(0, limit)
-    .map((u) => ({ id: u.id, name: u.firstName || u.username || "Болельщик", score: u.weekGoals, photoUrl: u.photoUrl || null }));
+    .map((u) => ({
+      id: u.id,
+      name: u.firstName || u.username || "Болельщик",
+      score: u.weekGoals,
+      photoUrl: u.photoUrl || null,
+      isReferrer: (u.referralCount || 0) > 0, // маленькая пометка у имени — "приводит друзей"
+    }));
 
   const byAllTime = [...withCurrentWeek]
     .sort((a, b) => b.totalGoals - a.totalGoals)
     .slice(0, limit)
-    .map((u) => ({ id: u.id, name: u.firstName || u.username || "Болельщик", score: u.totalGoals, photoUrl: u.photoUrl || null }));
+    .map((u) => ({
+      id: u.id,
+      name: u.firstName || u.username || "Болельщик",
+      score: u.totalGoals,
+      photoUrl: u.photoUrl || null,
+      isReferrer: (u.referralCount || 0) > 0,
+    }));
 
   return { week: byWeek, allTime: byAllTime, weekKey: curWeek };
 }
@@ -557,6 +613,100 @@ function buildOpponentRoad(level, behind = 2, ahead = 4) {
     });
   }
   return road;
+}
+
+// ------------------------- Зал славы клуба ----------------------------------
+//
+// В отличие от лидерборда (который каждую неделю обнуляется), зал славы —
+// это абсолютные рекорды за всё время. topN игроков в каждой из трёх
+// категорий: лучший результат за один матч, самый длинный стрик подряд
+// (bestStreak — см. registerDailyLogin, он не сбрасывается вместе с текущим
+// streak) и общее число голов за всё время.
+function buildHallOfFame(users, topN = 3) {
+  const toRow = (u, value) => ({
+    id: u.id,
+    name: u.firstName || u.username || "Болельщик",
+    value,
+    photoUrl: u.photoUrl || null,
+  });
+
+  const bestMatch = [...users]
+    .filter((u) => (u.bestScore || 0) > 0)
+    .sort((a, b) => (b.bestScore || 0) - (a.bestScore || 0))
+    .slice(0, topN)
+    .map((u) => toRow(u, u.bestScore));
+
+  const longestStreak = [...users]
+    .filter((u) => (u.bestStreak || 0) > 0)
+    .sort((a, b) => (b.bestStreak || 0) - (a.bestStreak || 0))
+    .slice(0, topN)
+    .map((u) => toRow(u, u.bestStreak));
+
+  const totalGoals = [...users]
+    .filter((u) => (u.totalGoals || 0) > 0)
+    .sort((a, b) => (b.totalGoals || 0) - (a.totalGoals || 0))
+    .slice(0, topN)
+    .map((u) => toRow(u, u.totalGoals));
+
+  return { bestMatch, longestStreak, totalGoals };
+}
+
+// ------------------------- Конкурс дня (с реальным призом) ------------------
+//
+// Отдельный от "дня матча" (/matchday) режим: тоже даёт безлимитные попытки,
+// но привязан не к календарному дню, а к точному моменту запуска (см.
+// CONTEST_DURATION_MS выше) и ведёт отдельный подсчёт голов именно за это
+// окно — специально для того, чтобы честно определить победителя разового
+// конкурса с призом, независимо от остальной игровой статистики.
+
+/** Активен ли сейчас конкурс дня. settings.contestStartTs — ts начала или null. */
+function isContestActive(settings, now = Date.now()) {
+  if (!settings || !settings.contestStartTs) return false;
+  return now < settings.contestStartTs + CONTEST_DURATION_MS;
+}
+
+/**
+ * Учитывает забитые голы в счёт ТЕКУЩЕГО конкурса (если он сейчас активен).
+ * Мутирует user. Не часть submitMatchResult специально — конкурс зависит от
+ * глобальных settings, а не только от матча, поэтому вызывается отдельно из
+ * server.js после submitMatchResult (см. /api/match/result).
+ * contestGoalsForStartTs — метка, каким именно запуском конкурса считаны
+ * голы: если стартовал новый конкурс, счёт для этого игрока начинается с
+ * нуля, даже если в базе остался "contestGoals" от предыдущего разыгранного
+ * конкурса.
+ */
+function recordContestGoal(user, settings, goals, now = Date.now()) {
+  if (!isContestActive(settings, now) || !goals) return user;
+  if (user.contestGoalsForStartTs !== settings.contestStartTs) {
+    user.contestGoalsForStartTs = settings.contestStartTs;
+    user.contestGoals = 0;
+  }
+  user.contestGoals += goals;
+  user.contestGoalsReachedAt = now; // для тай-брейка "кто раньше набрал этот счёт"
+  return user;
+}
+
+/**
+ * Итоги конкретного запуска конкурса (contestStartTs — его "id") — полный
+ * список участников, отсортированный по голам, при равенстве выигрывает тот,
+ * кто набрал этот результат раньше по времени. Участвуют все — и Telegram,
+ * и веб-гости (см. isWebGuestId ниже, используется только для пометки в
+ * итоговом сообщении, не для фильтрации).
+ */
+function buildContestResults(users, contestStartTs) {
+  return users
+    .filter((u) => u.contestGoalsForStartTs === contestStartTs && (u.contestGoals || 0) > 0)
+    .sort((a, b) => {
+      if (b.contestGoals !== a.contestGoals) return b.contestGoals - a.contestGoals;
+      return (a.contestGoalsReachedAt || 0) - (b.contestGoalsReachedAt || 0);
+    })
+    .map((u) => ({
+      id: u.id,
+      name: u.firstName || u.username || "Болельщик",
+      goals: u.contestGoals,
+      reachedAt: u.contestGoalsReachedAt,
+      isTelegram: !isWebGuestId(u.id),
+    }));
 }
 
 // ------------------------- Приватная статистика (только для админа) --------
@@ -626,6 +776,10 @@ module.exports = {
   CLUB_UTC_OFFSET_HOURS,
   NEWS_BONUS_ENERGY,
   NEWS_BONUS_CEILING_EXTRA,
+  REFERRAL_INVITER_ENERGY_BONUS,
+  REFERRAL_INVITER_MAX_BONUSES,
+  REFERRAL_INVITEE_ENERGY_BONUS,
+  CONTEST_DURATION_MS,
   OPPONENTS,
   ACHIEVEMENTS,
   DIFFICULTY_TIERS,
@@ -647,6 +801,11 @@ module.exports = {
   ensureCurrentDay,
   yesterdayKey,
   buildDailyLeaders,
+  creditReferral,
+  buildHallOfFame,
+  isContestActive,
+  recordContestGoal,
+  buildContestResults,
   getKeeperDifficulty,
   getDifficultyTierName,
   getOpponentName,

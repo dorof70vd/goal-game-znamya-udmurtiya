@@ -553,4 +553,124 @@ check("buildDailyLeaders возвращает пустой список, есл�
   assert.deepStrictEqual(logic.buildDailyLeaders(users, now, 1), []);
 });
 
+check("creditReferral даёт постоянную прибавку обоим и считает referralCount", () => {
+  const inviter = freshUser({ id: "111", maxEnergy: 8, energy: 2, referralCount: 0 });
+  const invitee = freshUser({ id: "222", maxEnergy: 5, energy: 5 });
+  const res = logic.creditReferral(inviter, invitee);
+  assert.strictEqual(res.inviterBonusApplied, true);
+  assert.strictEqual(res.referralCount, 1);
+  assert.strictEqual(inviter.maxEnergy, 9); // постоянная прибавка, а не разовая сверх потолка
+  assert.strictEqual(inviter.energy, 3);
+  assert.strictEqual(inviter.referralCount, 1);
+  assert.strictEqual(invitee.maxEnergy, 6);
+  assert.strictEqual(invitee.energy, 6);
+  assert.strictEqual(invitee.referredBy, "111");
+});
+
+check("creditReferral перестаёт повышать maxEnergy инвайтеру после потолка REFERRAL_INVITER_MAX_BONUSES", () => {
+  const inviter = freshUser({ id: "111", maxEnergy: 8, energy: 8, referralCount: logic.REFERRAL_INVITER_MAX_BONUSES });
+  const invitee = freshUser({ id: "999", maxEnergy: 5, energy: 5 });
+  const res = logic.creditReferral(inviter, invitee);
+  assert.strictEqual(res.inviterBonusApplied, false);
+  assert.strictEqual(inviter.maxEnergy, 8); // прибавки больше нет — потолок достигнут
+  assert.strictEqual(inviter.referralCount, logic.REFERRAL_INVITER_MAX_BONUSES + 1); // счётчик всё равно растёт
+  assert.strictEqual(invitee.maxEnergy, 6); // приглашённому бонус даётся всегда, независимо от потолка инвайтера
+});
+
+check("достижение «Заводила» выдаётся после первого успешного приглашения", () => {
+  const inviter = freshUser({ referralCount: 0 });
+  const invitee = freshUser({ id: "2" });
+  logic.creditReferral(inviter, invitee);
+  const newly = logic.checkAchievements(inviter, {});
+  assert.ok(newly.includes("referral_1"));
+  // повторный вызов не выдаёт значок повторно
+  assert.deepStrictEqual(logic.checkAchievements(inviter, {}), []);
+});
+
+check("buildLeaderboard помечает игроков с приглашёнными друзьями isReferrer", () => {
+  const now = Date.now();
+  const users = [
+    freshUser({ id: "1", firstName: "Пригласил", totalGoals: 5, weekGoals: 5, referralCount: 2 }),
+    freshUser({ id: "2", firstName: "Не пригласил", totalGoals: 3, weekGoals: 3, referralCount: 0 }),
+  ];
+  const board = logic.buildLeaderboard(users, now);
+  const first = board.allTime.find((r) => r.id === "1");
+  const second = board.allTime.find((r) => r.id === "2");
+  assert.strictEqual(first.isReferrer, true);
+  assert.strictEqual(second.isReferrer, false);
+});
+
+check("registerDailyLogin копит bestStreak даже после сброса текущего streak", () => {
+  const day1 = Date.parse("2026-01-10T10:00:00Z");
+  const u = freshUser({ streak: 0, lastPlayedDate: null, bestStreak: 0 });
+  logic.registerDailyLogin(u, day1);
+  const day2 = day1 + 25 * 60 * 60 * 1000; // следующий клубный день — стрик растёт
+  logic.registerDailyLogin(u, day2);
+  const day3 = day2 + 25 * 60 * 60 * 1000;
+  logic.registerDailyLogin(u, day3);
+  assert.strictEqual(u.streak, 3);
+  assert.strictEqual(u.bestStreak, 3);
+
+  const dayFarAway = day3 + 10 * 24 * 60 * 60 * 1000; // пропуск больше дня — streak обнуляется
+  logic.registerDailyLogin(u, dayFarAway);
+  assert.strictEqual(u.streak, 1);
+  assert.strictEqual(u.bestStreak, 3); // а рекорд остаётся
+});
+
+check("buildHallOfFame возвращает топ-N по трём категориям, игнорируя нулевые значения", () => {
+  const users = [
+    freshUser({ id: "1", firstName: "А", bestScore: 5, bestStreak: 10, totalGoals: 100 }),
+    freshUser({ id: "2", firstName: "Б", bestScore: 3, bestStreak: 20, totalGoals: 50 }),
+    freshUser({ id: "3", firstName: "В", bestScore: 0, bestStreak: 0, totalGoals: 0 }), // ничего не набрал — не должен попасть
+  ];
+  const hof = logic.buildHallOfFame(users, 3);
+  assert.deepStrictEqual(hof.bestMatch.map((r) => r.id), ["1", "2"]);
+  assert.deepStrictEqual(hof.longestStreak.map((r) => r.id), ["2", "1"]);
+  assert.deepStrictEqual(hof.totalGoals.map((r) => r.id), ["1", "2"]);
+  assert.strictEqual(hof.bestMatch[0].value, 5);
+});
+
+check("isContestActive учитывает окно ровно CONTEST_DURATION_MS от старта", () => {
+  const start = Date.now();
+  assert.strictEqual(logic.isContestActive({ contestStartTs: start }, start), true);
+  assert.strictEqual(logic.isContestActive({ contestStartTs: start }, start + logic.CONTEST_DURATION_MS - 1), true);
+  assert.strictEqual(logic.isContestActive({ contestStartTs: start }, start + logic.CONTEST_DURATION_MS), false);
+  assert.strictEqual(logic.isContestActive({ contestStartTs: null }, start), false);
+  assert.strictEqual(logic.isContestActive(null, start), false);
+});
+
+check("recordContestGoal копит голы только пока конкурс активен и сбрасывается при новом запуске", () => {
+  const start1 = Date.now();
+  const settings1 = { contestStartTs: start1 };
+  const u = freshUser({});
+  logic.recordContestGoal(u, settings1, 3, start1 + 1000);
+  logic.recordContestGoal(u, settings1, 2, start1 + 2000);
+  assert.strictEqual(u.contestGoals, 5);
+
+  // конкурс уже закончился — гол вне окна не считается
+  logic.recordContestGoal(u, settings1, 10, start1 + logic.CONTEST_DURATION_MS + 1000);
+  assert.strictEqual(u.contestGoals, 5);
+
+  // новый запуск конкурса — счёт для игрока начинается с нуля
+  const start2 = start1 + 2 * logic.CONTEST_DURATION_MS;
+  const settings2 = { contestStartTs: start2 };
+  logic.recordContestGoal(u, settings2, 4, start2 + 500);
+  assert.strictEqual(u.contestGoals, 4);
+});
+
+check("buildContestResults сортирует по голам, при равенстве — по времени достижения результата", () => {
+  const startTs = Date.now();
+  const users = [
+    freshUser({ id: "1", firstName: "Первый", contestGoalsForStartTs: startTs, contestGoals: 5, contestGoalsReachedAt: startTs + 5000 }),
+    freshUser({ id: "2", firstName: "Второй", contestGoalsForStartTs: startTs, contestGoals: 5, contestGoalsReachedAt: startTs + 1000 }),
+    freshUser({ id: "web_3", firstName: "Гость", contestGoalsForStartTs: startTs, contestGoals: 8, contestGoalsReachedAt: startTs + 9000 }),
+    freshUser({ id: "4", firstName: "Старый конкурс", contestGoalsForStartTs: startTs - 999, contestGoals: 100, contestGoalsReachedAt: startTs }),
+    freshUser({ id: "5", firstName: "Ноль", contestGoalsForStartTs: startTs, contestGoals: 0, contestGoalsReachedAt: startTs }),
+  ];
+  const results = logic.buildContestResults(users, startTs);
+  assert.deepStrictEqual(results.map((r) => r.id), ["web_3", "2", "1"]); // 8 голов первый, при равных 5 — кто раньше достиг
+  assert.strictEqual(results[0].isTelegram, false);
+  assert.strictEqual(results[1].isTelegram, true);
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);

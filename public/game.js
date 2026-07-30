@@ -131,7 +131,9 @@
   }
 
   function updateHudFromState(state) {
-    if (state.matchDayActive) {
+    if (state.contestActive) {
+      el.energyStat.textContent = `⚡ ∞ (конкурс дня!)`;
+    } else if (state.matchDayActive) {
       el.energyStat.textContent = `⚡ ∞ (день матча!)`;
     } else if (state.energy > state.maxEnergy) {
       el.energyStat.textContent = `⚡ ${state.energy} (есть бонус!)`;
@@ -279,6 +281,12 @@
   let duelContext = null; // { duelId, token, role } — заполняется, когда играем дуэль, а не обычный матч
   let trainingContext = null; // { mode, token } — заполняется во время тренировки (не влияет на прогресс)
   let energyWaitPollTimer = null; // фоновая проверка на экране "Энергия закончилась" — вдруг админ включил день матча
+
+  // Только для текста на экране приглашения — реальные цифры считает сервер
+  // (см. REFERRAL_INVITER_ENERGY_BONUS/REFERRAL_INVITER_MAX_BONUSES в
+  // src/game-logic.js). Если поменяешь их там — поменяй и здесь.
+  const REFERRAL_ENERGY_BONUS = 1;
+  const REFERRAL_MAX_FRIENDS = 4;
   let currentMode = "attack"; // 'attack' | 'defense' — второй режим "Вратарь"
   let shotIndex = 0;
   let successCount = 0;
@@ -783,7 +791,8 @@
       rank.textContent = `${i + 1}.`;
       const name = document.createElement("span");
       name.className = "lb-name";
-      name.textContent = r.name;
+      name.textContent = r.isReferrer ? `🎗 ${r.name}` : r.name;
+      if (r.isReferrer) name.title = "Приводит друзей в игру";
       const score = document.createElement("span");
       score.className = "lb-score";
       score.textContent = r.score;
@@ -821,6 +830,10 @@
       "Играете асинхронно по очереди — результат узнаёте оба, как только сыграют оба.\n\n" +
       "Энергия — 8 попыток на матчи, дальше восстанавливается по 1 за 30 минут. Бонусы за новость клуба, VK и MAX дают +2 попытки " +
       "сверх максимума каждый день, и они не мешают друг другу.\n\n" +
+      "👥 Пригласи друга — своя ссылка на экране «Достижения». Когда друг зайдёт по ней в игру впервые, вы оба навсегда получите " +
+      `+${REFERRAL_ENERGY_BONUS} к максимуму энергии (у пригласившего — за первых ${REFERRAL_MAX_FRIENDS} друзей).\n\n` +
+      "🏛 Зал славы — абсолютные рекорды клуба (лучший матч, самый длинный стрик, больше всего голов за всё время), смотреть можно из «Таблицы лидеров».\n\n" +
+      "🏆 Конкурс дня — когда клуб объявляет конкурс с призом, на 24 часа снимаются все лимиты на энергию, а голы считаются отдельно на приз — следи за объявлениями клуба.\n\n" +
       "Достижения выдаются автоматически за голы, серии ударов, идеальные матчи и стрик визитов — посмотреть свою коллекцию можно кнопкой «🏅 Достижения».";
     showOverlay({
       title: "❓ Правила игры",
@@ -842,6 +855,73 @@
       text: lines,
       btnLabel: "Назад",
       onBtn: renderHome,
+      btn2Label: "👥 Пригласить друга",
+      onBtn2: showInviteFriend,
+    });
+  }
+
+  // Персональная реферальная ссылка: в Telegram — диплинк на бота
+  // (?start=ref_<id>, бот сам подставит её в кнопку мини-аппа — см.
+  // server.js), вне Telegram — прямая ссылка на игру с ?ref=<id>, чтобы
+  // приглашённый друг тоже мог быть кем угодно, не только из Telegram.
+  function myReferralLink() {
+    if (!currentUser) return null;
+    if (inTelegramApp() && currentUser.botUrl) {
+      return `${currentUser.botUrl}?start=ref_${encodeURIComponent(currentUser.id)}`;
+    }
+    return `${location.origin}/?ref=${encodeURIComponent(currentUser.id)}`;
+  }
+
+  function showInviteFriend() {
+    const link = myReferralLink();
+    const bonusNote = `Постоянная прибавка +${REFERRAL_ENERGY_BONUS} к максимуму энергии — навсегда, не разово.`;
+    showOverlay({
+      title: "👥 Пригласи друга",
+      text:
+        `Поделись личной ссылкой — когда друг зайдёт по ней в игру в первый раз, вы оба получите бонус. ${bonusNote} ` +
+        `Бонус инвайтеру копится за первых ${REFERRAL_MAX_FRIENDS} друзей.` +
+        (link ? `\n\nТвоя ссылка:\n${link}` : ""),
+      btnLabel: "Поделиться ссылкой",
+      onBtn: () => shareInviteLink(link),
+      btn2Label: "Назад",
+      onBtn2: showAchievements,
+    });
+  }
+
+  function shareInviteLink(link) {
+    if (!link) return;
+    const shareText = `⚽ Заходи в «Забей гол» — ХК «Знамя-Удмуртия»! По моей ссылке мы оба получим бонус к энергии.`;
+    if (tg && tg.openTelegramLink) {
+      const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`;
+      tg.openTelegramLink(url);
+    } else if (navigator.share) {
+      navigator.share({ text: shareText, url: link }).catch(() => {});
+    } else {
+      window.prompt("Скопируй и отправь другу:", `${shareText}\n${link}`);
+    }
+  }
+
+  // Небольшая витрина форматирования зала славы — используется и в самом
+  // экране (showHallOfFame), и в баннере при заходе веб-гостя (см. init()).
+  function fmtHofRows(rows, unit) {
+    if (!rows || !rows.length) return "пока пусто";
+    return rows.map((r, i) => `${i + 1}. ${r.name} — ${r.value} ${unit}`).join("\n");
+  }
+  function formatHallOfFameText(hof) {
+    return (
+      `🥅 Лучший результат за матч:\n${fmtHofRows(hof.bestMatch, "гол")}\n\n` +
+      `🔥 Самый длинный стрик подряд:\n${fmtHofRows(hof.longestStreak, "дн.")}\n\n` +
+      `⚽ Больше всего голов за всё время:\n${fmtHofRows(hof.totalGoals, "гол")}`
+    );
+  }
+
+  async function showHallOfFame() {
+    const hof = await fetch("/api/hall-of-fame").then((r) => r.json());
+    showOverlay({
+      title: "🏛 Зал славы клуба",
+      text: formatHallOfFameText(hof),
+      btnLabel: "Назад",
+      onBtn: showLeaderboard,
     });
   }
 
@@ -854,6 +934,8 @@
       renderList: rows.length ? (container) => renderLeaderboardRows(container, rows) : null,
       btnLabel: "Назад",
       onBtn: () => renderHome(),
+      btn2Label: "🏛 Зал славы",
+      onBtn2: showHallOfFame,
     });
   }
 
@@ -977,7 +1059,8 @@
       ? `Отрази все ${currentUser.shotsPerMatch} бросков — пройдёшь дальше!${tierSuffix}`
       : `Забей все ${currentUser.shotsPerMatch} — откроешь следующего соперника!${tierSuffix}`;
 
-    if (!currentUser.matchDayActive && currentUser.energy < 1) {
+    const unlimitedNow = currentUser.matchDayActive || currentUser.contestActive;
+    if (!unlimitedNow && currentUser.energy < 1) {
       showOverlay({
         title: "Энергия закончилась",
         text: `Следующая попытка через ${fmtMs(currentUser.msUntilNextEnergy)}. Заходи завтра — получишь бонус за стрик!` +
@@ -1001,10 +1084,16 @@
       startEnergyWaitPoll();
       return;
     }
+    const contestTitle = "🏆 Конкурс дня — играй без ограничений!";
+    const matchDayTitle = "⚡ День матча — попытки безлимитны!";
+    const contestText = `Прямо сейчас идёт конкурс дня на приз от клуба — голы засчитываются в счёт конкурса! ${actionVerb} без ограничений. Соперник: ${opponent}.`;
+    const matchDayText = `Сегодня день игры клуба — ${actionVerb.toLowerCase()} сколько хочешь! Соперник: ${opponent}.`;
     showOverlay({
-      title: currentUser.matchDayActive ? `⚡ День матча — попытки безлимитны!` : `${modeIcon} ${opponent}`,
-      text: currentUser.matchDayActive
-        ? `Сегодня день игры клуба — ${actionVerb.toLowerCase()} сколько хочешь! Соперник: ${opponent}.`
+      title: currentUser.contestActive ? contestTitle : currentUser.matchDayActive ? matchDayTitle : `${modeIcon} ${opponent}`,
+      text: currentUser.contestActive
+        ? contestText
+        : currentUser.matchDayActive
+        ? matchDayText
         : `У тебя ${currentUser.energy} попыток. ${goalPhrase}`,
       btnLabel: "Играть",
       btn2Label: "Таблица лидеров",
@@ -1138,7 +1227,7 @@
       showOverlay({
         title,
         text,
-        btnLabel: (currentUser.matchDayActive || currentUser.energy >= 1) ? "Играть ещё" : undefined,
+        btnLabel: (currentUser.matchDayActive || currentUser.contestActive || currentUser.energy >= 1) ? "Играть ещё" : undefined,
         btn2Label: "Поделиться результатом",
         btn3Label: canShareVk ? "Поделиться ВКонтакте" : undefined,
         btn4Label: "🏅 Достижения",
@@ -1147,7 +1236,7 @@
         onBtn3: canShareVk ? shareResultToVk : undefined,
         onBtn4: showAchievements,
       });
-      if (!currentUser.matchDayActive && currentUser.energy < 1) {
+      if (!currentUser.matchDayActive && !currentUser.contestActive && currentUser.energy < 1) {
         setTimeout(renderHome, 50);
       }
     } catch (err) {
@@ -1348,143 +1437,12 @@
     return logoImagePromise;
   }
 
-  /** Путь скруглённого прямоугольника — без опоры на ctx.roundRect (не везде поддержан). */
-  function roundedRectPath(c, x, y, w, h, r) {
-    c.beginPath();
-    c.moveTo(x + r, y);
-    c.arcTo(x + w, y, x + w, y + h, r);
-    c.arcTo(x + w, y + h, x, y + h, r);
-    c.arcTo(x, y + h, x, y, r);
-    c.arcTo(x, y, x + w, y, r);
-    c.closePath();
-  }
-
-  async function buildShareCardBlob({ scoreLine, subtitle, footer }) {
-    const w = 1080, h = 1350;
-    const cnv = document.createElement("canvas");
-    cnv.width = w;
-    cnv.height = h;
-    const c = cnv.getContext("2d");
-
-    // Фон — сплошной градиент клубных цветов на весь холст (без "обрыва" на пустой белый низ).
-    const grad = c.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, "#6f0f12");
-    grad.addColorStop(1, "#a81f24");
-    c.fillStyle = grad;
-    c.fillRect(0, 0, w, h);
-
-    const logo = await loadLogoImage();
-    if (logo && logo.width && logo.height) {
-      const logoH = 190;
-      const logoW = logo.width * (logoH / logo.height);
-      c.drawImage(logo, w / 2 - logoW / 2, 70, logoW, logoH);
-    }
-
-    c.textAlign = "center";
-    c.fillStyle = "#ffffff";
-    c.font = "bold 44px sans-serif";
-    c.fillText("«Забей гол»", w / 2, 330);
-    c.font = "500 30px sans-serif";
-    c.fillStyle = "rgba(255,255,255,0.85)";
-    c.fillText("ХК «Знамя-Удмуртия»", w / 2, 372);
-
-    // Светлая карточка-панель со счётом — занимает основную часть холста, без пустот.
-    const panelX = 90, panelY = 440, panelW = w - 180, panelH = 470;
-    roundedRectPath(c, panelX, panelY, panelW, panelH, 36);
-    c.fillStyle = "#eef3f7";
-    c.fill();
-
-    c.fillStyle = "#8f1418";
-    c.font = "bold 140px sans-serif";
-    c.fillText(scoreLine, w / 2, panelY + 250);
-
-    c.font = "600 40px sans-serif";
-    c.fillStyle = "#5a5f66";
-    c.fillText(subtitle, w / 2, panelY + 340);
-
-    // Декоративная полоса клубных цветов под панелью.
-    const stripeY = panelY + panelH + 60;
-    const stripeCount = 9, stripeW = 40, stripeGap = 14;
-    const stripesTotalW = stripeCount * stripeW + (stripeCount - 1) * stripeGap;
-    let stripeX = w / 2 - stripesTotalW / 2;
-    for (let i = 0; i < stripeCount; i++) {
-      c.fillStyle = i % 2 === 0 ? "#ffffff" : "#ffe27a";
-      c.fillRect(stripeX, stripeY, stripeW, 10);
-      stripeX += stripeW + stripeGap;
-    }
-
-    c.font = "bold 42px sans-serif";
-    c.fillStyle = "#ffffff";
-    c.fillText(footer || "Заходи сыграть в Telegram", w / 2, stripeY + 100);
-
-    c.font = "500 28px sans-serif";
-    c.fillStyle = "rgba(255,255,255,0.75)";
-    c.fillText("Официальная игра ХК «Знамя-Удмуртия»", w / 2, h - 70);
-
-    return new Promise((resolve) => cnv.toBlob((blob) => resolve(blob), "image/png"));
-  }
-
-  function blobToDataUrl(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  /** Загружает картинку-карточку на сервер и возвращает временную публичную ссылку на неё (или null). */
-  async function uploadShareCard(blob) {
-    if (!blob) return null;
-    try {
-      const dataUrl = await blobToDataUrl(blob);
-      const res = await api("/api/share-card", { imageBase64: dataUrl });
-      return res.url || null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /** Пытается поделиться картинкой (нативный шаринг файла, иначе — через ссылку на сервере). Возвращает true, если получилось. */
-  async function shareCardImage(blob, textCaption) {
-    if (!blob) return false;
-    try {
-      const file = new File([blob], "goal-game-result.png", { type: "image/png" });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: "«Забей гол»", text: textCaption });
-        return true;
-      }
-    } catch (_) {
-      /* пользователь отменил или платформа не поддерживает шаринг файлов — пробуем запасной вариант */
-    }
-    try {
-      const url = await uploadShareCard(blob);
-      if (url) {
-        if (tg && tg.shareToStory) {
-          tg.shareToStory(url, { text: textCaption });
-          return true;
-        }
-        if (tg && tg.openLink) {
-          tg.openLink(url);
-        } else {
-          window.open(url, "_blank");
-        }
-        return true;
-      }
-    } catch (_) {
-      /* не получилось — упадём в текстовый шаринг ниже */
-    }
-    return false;
-  }
-
   /**
-   * Открывает диалог "Поделиться" ВКонтакте с готовым текстом и картинкой —
-   * в отличие от общей кнопки "Поделиться результатом" (которая может увести
-   * в системное меню шаринга или, если оно недоступно, просто открыть картинку
-   * в новой вкладке без всякого контекста), эта кнопка ведёт именно туда, куда
-   * ожидает игрок: в форму репоста ВКонтакте, с описанием и ссылкой на игру.
+   * Открывает диалог "Поделиться" ВКонтакте с готовым текстом — карточку-
+   * картинку убрали по просьбе (только текст и ссылка на игру, VK сам
+   * подставит превью по OG-тегам страницы).
    */
-  function openVkShare(text, imageUrl) {
+  function openVkShare(text) {
     const linkUrl = `${location.origin}/`;
     const params = new URLSearchParams({
       url: linkUrl,
@@ -1492,7 +1450,6 @@
       description: text,
       noparse: "true",
     });
-    if (imageUrl) params.set("image", imageUrl);
     const shareUrl = `https://vk.com/share.php?${params.toString()}`;
     if (tg && tg.openLink) {
       tg.openLink(shareUrl);
@@ -1501,48 +1458,22 @@
     }
   }
 
-  async function shareResultToVk() {
+  function shareResultToVk() {
     const verb = lastPlayedMode === "defense" ? "Отразил" : "Забил";
     const text = `${verb} ${successCount} из ${match ? match.shotsPerMatch : 5} в игре «Забей гол» ХК «Знамя-Удмуртия» 🔴⚪ Стрик: ${currentUser.streak} дней. Заходи сыграть!`;
-    let imageUrl = null;
-    try {
-      const scoreLine = `${successCount}/${match ? match.shotsPerMatch : 5}`;
-      const subtitle = lastPlayedMode === "defense" ? "отражено в режиме «Вратарь»" : "голов забито вратарю";
-      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "Заходи сыграть — «Забей гол»" });
-      imageUrl = await uploadShareCard(blob);
-    } catch (_) {
-      /* не вышло с картинкой — поделимся хотя бы текстом и ссылкой */
-    }
-    openVkShare(text, imageUrl);
+    openVkShare(text);
   }
 
-  async function shareDuelResultToVk(res) {
+  function shareDuelResultToVk(res) {
     const subtitle =
       res.winner === "draw" ? "Ничья в дуэли!" : `Победил ${res.winner === "creator" ? res.creatorName : res.opponentName}`;
     const text = `⚔️ Дуэль в «Забей гол»: ${res.creatorName} — ${res.creatorGoals}, ${res.opponentName} — ${res.opponentGoals}. ${subtitle}`;
-    let imageUrl = null;
-    try {
-      const scoreLine = `${res.creatorGoals} : ${res.opponentGoals}`;
-      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "⚔️ Вызови друга на дуэль!" });
-      imageUrl = await uploadShareCard(blob);
-    } catch (_) {
-      /* не вышло с картинкой — поделимся хотя бы текстом и ссылкой */
-    }
-    openVkShare(text, imageUrl);
+    openVkShare(text);
   }
 
-  async function shareResult() {
+  function shareResult() {
     const verb = lastPlayedMode === "defense" ? "Отразил" : "Забил";
     const text = `${verb} ${successCount} из ${match ? match.shotsPerMatch : 5} в игре «Забей гол» ХК «Знамя-Удмуртия» 🔴⚪ Стрик: ${currentUser.streak} дней. Заходи сыграть!`;
-
-    try {
-      const scoreLine = `${successCount}/${match ? match.shotsPerMatch : 5}`;
-      const subtitle = lastPlayedMode === "defense" ? "отражено в режиме «Вратарь»" : "голов забито вратарю";
-      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "Заходи сыграть — «Забей гол»" });
-      if (await shareCardImage(blob, text)) return;
-    } catch (_) {
-      /* если с картинкой не вышло — делимся обычным текстом ниже */
-    }
 
     const botUrl = (currentUser && currentUser.botUrl) || "";
     const shareUrl = botUrl
@@ -1557,17 +1488,10 @@
     }
   }
 
-  async function shareDuelResult(res) {
+  function shareDuelResult(res) {
     const subtitle =
       res.winner === "draw" ? "Ничья в дуэли!" : `Победил ${res.winner === "creator" ? res.creatorName : res.opponentName}`;
     const text = `⚔️ Дуэль в «Забей гол»: ${res.creatorName} — ${res.creatorGoals}, ${res.opponentName} — ${res.opponentGoals}. ${subtitle}`;
-    try {
-      const scoreLine = `${res.creatorGoals} : ${res.opponentGoals}`;
-      const blob = await buildShareCardBlob({ scoreLine, subtitle, footer: "⚔️ Вызови друга на дуэль!" });
-      if (await shareCardImage(blob, text)) return;
-    } catch (_) {
-      /* не вышло с картинкой — делимся текстом */
-    }
     if (navigator.share) {
       navigator.share({ text }).catch(() => {});
     } else {
@@ -1604,7 +1528,16 @@
     loadLogoImage().then((img) => { logoImg = img; });
     showOverlay({ title: "Секунду…", text: "Загружаем игру…" });
     try {
-      const state = await api("/api/auth", {});
+      // Реферальный код — либо из обычной веб-ссылки ?ref=<id>, либо (в
+      // Telegram) уже подставлен ботом в URL мини-аппа тем же способом —
+      // см. server.js, bot.command("start"). Шлём только при самом первом
+      // /api/auth: сервер всё равно засчитает бонус только по-настоящему
+      // новым пользователям, но незачем повторно передавать его в каждый
+      // последующий запрос.
+      const params = new URLSearchParams(location.search);
+      const refCode = params.get("ref");
+
+      const state = await api("/api/auth", refCode ? { ref: refCode } : {});
       currentUser = state;
       currentMode = state.mode || "attack";
       if (Array.isArray(state.achievementCatalog)) {
@@ -1620,6 +1553,19 @@
         showOverlay({
           title: "🔥 Ты был лидером дня!",
           text: `Вчера ты забил больше всех — ${n} ${ruGoalsWord(n)}! Попробуй сегодня повторить или улучшить результат.`,
+          btnLabel: "Играть",
+          onBtn: goToStartScreen,
+        });
+        return;
+      }
+
+      // Зал славы — раз в неделю, тот же приём, только для веб-гостей
+      // (Telegram-игроки получают то же самое личным сообщением от бота раз
+      // в неделю, см. notifyHallOfFameIfDue в server.js).
+      if (state.hallOfFameBanner) {
+        showOverlay({
+          title: "🏛 Зал славы клуба",
+          text: formatHallOfFameText(state.hallOfFameBanner),
           btnLabel: "Играть",
           onBtn: goToStartScreen,
         });

@@ -29,6 +29,13 @@ const DAILY_LEADER_TOP_N = 1;
 // чтобы не будить лидера дня посреди ночи.
 const DAILY_LEADER_NOTIFY_HOUR = 9;
 
+// Сколько игроков показывать в каждой из трёх категорий зала славы.
+const HALL_OF_FAME_TOP_N = 3;
+// День недели (0=воскресенье..6=суббота, как у Date.getUTCDay) и час по
+// времени клуба, когда уходит еженедельная рассылка залаславы.
+const HALL_OF_FAME_NOTIFY_WEEKDAY = 1; // понедельник
+const HALL_OF_FAME_NOTIFY_HOUR = 10;
+
 if (!BOT_TOKEN) {
   console.warn(
     "[WARN] BOT_TOKEN не задан. Сайт мини-аппа и API поднимутся, но бот работать не будет.\n" +
@@ -37,8 +44,7 @@ if (!BOT_TOKEN) {
 }
 
 const app = express();
-// Увеличенный лимит нужен для загрузки картинки-карточки результата (см. /api/share-card).
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 // Формат клиентского веб-идентификатора для гостевого входа (см. ниже).
@@ -96,6 +102,7 @@ function serializeUser(user, now) {
     opponentRoad: logic.buildOpponentRoad(user.level),
     club: CLUB_NAME,
     matchDayActive,
+    contestActive: logic.isContestActive(settings, now),
     newsBonusAvailable: Boolean(NEWS_URL) && logic.isNewsBonusAvailable(user, now),
     newsUrl: NEWS_URL || null,
     vkBonusAvailable: Boolean(VK_URL) && logic.isVkBonusAvailable(user, now),
@@ -103,6 +110,7 @@ function serializeUser(user, now) {
     maxBonusAvailable: Boolean(MAX_URL) && logic.isMaxBonusAvailable(user, now),
     maxUrl: MAX_URL || null,
     botUrl: botUsername ? `https://t.me/${botUsername}` : null,
+    referralCount: user.referralCount || 0,
   };
 }
 
@@ -113,6 +121,7 @@ app.post("/api/auth", (req, res) => {
   if (!tgUser) return;
   const now = Date.now();
 
+  const isNewUser = !db.getUser(tgUser.id);
   const user = db.getOrCreateUser(tgUser.id, {
     username: tgUser.username,
     firstName: tgUser.first_name,
@@ -123,6 +132,25 @@ app.post("/api/auth", (req, res) => {
   logic.ensureCurrentDay(user, now);
   const loginResult = logic.registerDailyLogin(user, now);
   logic.ensureCurrentWeek(user, now);
+
+  // Реферальная механика — засчитываем только по-настоящему новым игрокам
+  // (иначе можно было бы получать бонус повторно, просто переоткрывая
+  // ссылку). ref приходит либо из t.me-диплинка (?start=ref_<id>, бот кладёт
+  // его в URL мини-аппа), либо прямо из обычной веб-ссылки ?ref=<id>.
+  let referralApplied = false;
+  if (isNewUser) {
+    const refCode = req.body?.ref || req.query?.ref;
+    if (typeof refCode === "string" && refCode && refCode !== user.id) {
+      const inviter = db.getUser(refCode);
+      if (inviter) {
+        logic.creditReferral(inviter, user, now);
+        logic.checkAchievements(inviter, {}); // чтобы "Заводила" появился у инвайтера сразу, не дожидаясь его следующего матча
+        db.saveUser(inviter);
+        referralApplied = true;
+      }
+    }
+  }
+
   const newAchievements = logic.checkAchievements(user, {});
 
   // "Ты был лидером дня" — баннер в самой игре для тех, кто зашёл не из
@@ -146,6 +174,16 @@ app.post("/api/auth", (req, res) => {
     }
   }
 
+  // Зал славы — тот же приём: раз в неделю показываем веб-гостю баннер с
+  // текущими тремя категориями (у Telegram-игроков — своя еженедельная
+  // рассылка от бота, см. notifyHallOfFameIfDue ниже).
+  let hallOfFameBanner = null;
+  const curWeek = logic.weekKey(now);
+  if (logic.isWebGuestId(user.id) && user.hallOfFameBannerShownForWeek !== curWeek) {
+    hallOfFameBanner = logic.buildHallOfFame(db.getAllUsers(), HALL_OF_FAME_TOP_N);
+    user.hallOfFameBannerShownForWeek = curWeek;
+  }
+
   db.saveUser(user);
 
   res.json({
@@ -154,6 +192,8 @@ app.post("/api/auth", (req, res) => {
     newAchievements,
     achievementCatalog: logic.ACHIEVEMENTS,
     leaderBanner,
+    hallOfFameBanner,
+    referralApplied,
   });
 });
 
@@ -163,13 +203,21 @@ app.get("/api/leaderboard", (req, res) => {
   res.json(logic.buildLeaderboard(users, now));
 });
 
+app.get("/api/hall-of-fame", (_req, res) => {
+  const users = db.getAllUsers();
+  res.json(logic.buildHallOfFame(users, HALL_OF_FAME_TOP_N));
+});
+
 app.post("/api/match/start", (req, res) => {
   const tgUser = authOrFail(req, res);
   if (!tgUser) return;
   const now = Date.now();
   const user = db.getOrCreateUser(tgUser.id, {});
   logic.applyEnergyRegen(user, now);
-  const unlimited = logic.isMatchDayActive(db.getSettings(), now);
+  const settings = db.getSettings();
+  // День настоящего матча клуба (/matchday) и конкурс дня (/contest) — два
+  // независимых переключателя, но оба дают безлимитные попытки одинаково.
+  const unlimited = logic.isMatchDayActive(settings, now) || logic.isContestActive(settings, now);
 
   if (!logic.canStartMatch(user, unlimited)) {
     db.saveUser(user);
@@ -223,6 +271,10 @@ app.post("/api/match/result", (req, res) => {
 
   try {
     const result = logic.submitMatchResult(user, token, Number(goals), now);
+    // Учитываем гол(ы) в счёт конкурса дня, если он сейчас идёт — отдельно от
+    // submitMatchResult, потому что зависит от глобальных settings, а не
+    // только от самого матча (см. recordContestGoal в game-logic.js).
+    logic.recordContestGoal(user, db.getSettings(), result.goals, now);
     db.saveUser(user);
     res.json({ ...result, ...serializeUser(user, now) });
   } catch (err) {
@@ -370,64 +422,6 @@ app.post("/api/duel/result", async (req, res) => {
   });
 });
 
-// --- Карточка результата для шеринга ------------------------------------
-//
-// Игрок рисует картинку сам на canvas (клиент), сюда только загружает готовые
-// PNG-байты, чтобы получить публичную HTTPS-ссылку — она нужна, например, для
-// tg.shareToStory (Telegram требует настоящий URL, не data:-строку) или чтобы
-// просто открыть/переслать картинку. Храним в памяти (не на диске) — это
-// одноразовые, недолговечные картинки, а не данные игроков, поэтому их не
-// жалко терять при перезапуске сервиса.
-
-const SHARE_CARD_MAX_BYTES = 2 * 1024 * 1024; // 2 МБ с запасом
-const SHARE_CARD_TTL_MS = 2 * 60 * 60 * 1000; // 2 часа хватает, чтобы переслать
-const SHARE_CARD_MAX_COUNT = 300; // защита от разрастания памяти на бесплатном тарифе
-const shareCards = new Map(); // id -> { buffer, mime, createdAt }
-
-function cleanupShareCards() {
-  const now = Date.now();
-  for (const [id, card] of shareCards) {
-    if (now - card.createdAt > SHARE_CARD_TTL_MS) {
-      shareCards.delete(id);
-    }
-  }
-  while (shareCards.size > SHARE_CARD_MAX_COUNT) {
-    const oldestId = shareCards.keys().next().value;
-    shareCards.delete(oldestId);
-  }
-}
-
-app.post("/api/share-card", (req, res) => {
-  const tgUser = authOrFail(req, res);
-  if (!tgUser) return;
-  const { imageBase64 } = req.body || {};
-  const match = typeof imageBase64 === "string" && imageBase64.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/);
-  if (!match) {
-    return res.status(400).json({ error: "BAD_IMAGE" });
-  }
-  const mime = match[1];
-  const buffer = Buffer.from(match[2], "base64");
-  if (buffer.length === 0 || buffer.length > SHARE_CARD_MAX_BYTES) {
-    return res.status(400).json({ error: "IMAGE_TOO_LARGE" });
-  }
-  cleanupShareCards();
-  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-  shareCards.set(id, { buffer, mime, createdAt: Date.now() });
-  const ext = mime === "image/png" ? "png" : "jpg";
-  const path = `/card/${id}.${ext}`;
-  res.json({ url: PUBLIC_URL ? `${PUBLIC_URL}${path}` : path });
-});
-
-app.get("/card/:id.:ext", (req, res) => {
-  const card = shareCards.get(req.params.id);
-  if (!card) {
-    return res.status(404).send("Карточка не найдена или устарела.");
-  }
-  res.set("Content-Type", card.mime);
-  res.set("Cache-Control", "no-store");
-  res.send(card.buffer);
-});
-
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
 // --- Telegram-бот --------------------------------------------------------
@@ -460,6 +454,21 @@ if (BOT_TOKEN) {
         `${duel.creatorName} вызывает тебя на дуэль в «Забей гол»! ⚔️\n\n` +
           `${duel.shotsPerDuel} ударов, у обоих одинаковый вратарь — честная игра. Го?`,
         { reply_markup: duelKeyboard }
+      );
+      return;
+    }
+
+    // Реферальная диплинк-приглашение: t.me/<bot>?start=ref_<id>. Само
+    // начисление бонуса происходит позже, в /api/auth (когда мини-апп
+    // реально откроется и авторизуется) — здесь только прокидываем ref в URL
+    // мини-аппа, ровно как и с дуэлью выше.
+    if (payload.startsWith("ref_")) {
+      const refId = payload.slice("ref_".length);
+      const keyboard = new InlineKeyboard().webApp("⚽ Забить гол", `${PUBLIC_URL}/?ref=${encodeURIComponent(refId)}`);
+      await ctx.reply(
+        `Тебя пригласили сыграть в «Забей гол» — ${CLUB_NAME}! ⚪🔴\n\n` +
+          `Заходи по кнопке ниже — и ты, и тот, кто позвал, получите бонус к максимуму энергии.`,
+        { reply_markup: keyboard }
       );
       return;
     }
@@ -505,6 +514,40 @@ if (BOT_TOKEN) {
       await ctx.reply(
         "🔴⚪ Безлимитный режим включён на сегодня — у всех болельщиков неограниченные попытки! " +
           "Отправь эту же команду ещё раз, чтобы выключить раньше времени."
+      );
+    }
+  });
+
+  // Конкурс дня с реальным призом — отдельная команда от /matchday: тоже
+  // даёт безлимит, но привязан к точному моменту запуска (ровно 24 часа),
+  // а не к календарному дню, и ведёт отдельный подсчёт голов именно за это
+  // окно (см. CONTEST_DURATION_MS/recordContestGoal в game-logic.js).
+  bot.command("contest", async (ctx) => {
+    const fromId = String(ctx.from.id);
+    if (ADMIN_IDS.length === 0) {
+      await ctx.reply(
+        "ADMIN_TELEGRAM_ID ещё не настроен на сервере — команда пока недоступна никому. " +
+          "Узнай свой ID командой /myid и попроси администратора хостинга вписать его в настройки."
+      );
+      return;
+    }
+    if (!ADMIN_IDS.includes(fromId)) {
+      await ctx.reply("Эта команда только для администратора клуба.");
+      return;
+    }
+    const settings = db.getSettings();
+    const now = Date.now();
+    if (logic.isContestActive(settings, now)) {
+      const startTs = settings.contestStartTs;
+      await finalizeContestNow(startTs, "остановлен вручную досрочно");
+      await ctx.reply("Конкурс дня остановлен досрочно. Итоги — сообщением выше.");
+    } else {
+      db.setContestStart(now);
+      const hours = Math.round(logic.CONTEST_DURATION_MS / 3600000);
+      await ctx.reply(
+        `🏆 Конкурс дня запущен! На ближайшие ${hours} часов у ВСЕХ игроков — и из Telegram, и по обычной ссылке (ВК/браузер) — ` +
+          `безлимитные попытки. Через ${hours} часов бот сам пришлёт тебе итоги с победителем. ` +
+          `Чтобы остановить раньше срока и получить итоги прямо сейчас — отправь /contest ещё раз.`
       );
     }
   });
@@ -607,6 +650,101 @@ async function notifyDailyLeadersIfDue(now = Date.now()) {
   db.setLastLeaderNotifyDayKey(todayKey);
 }
 
+function formatHallOfFameMessage(hof) {
+  const fmtRows = (rows, unit) =>
+    rows.length ? rows.map((r, i) => `${i + 1}. ${r.name} — ${r.value} ${unit}`).join("\n") : "пока пусто";
+  return (
+    `🏛 Зал славы клуба — «Забей гол»\n\n` +
+    `🥅 Лучший результат за матч:\n${fmtRows(hof.bestMatch, "гол")}\n\n` +
+    `🔥 Самый длинный стрик подряд:\n${fmtRows(hof.longestStreak, "дн.")}\n\n` +
+    `⚽ Больше всего голов за всё время:\n${fmtRows(hof.totalGoals, "гол")}\n\n` +
+    `Заходи почаще — может, следующим в зале славы будешь ты!`
+  );
+}
+
+/**
+ * Раз в неделю (по понедельникам, не раньше HALL_OF_FAME_NOTIFY_HOUR по
+ * времени клуба) шлёт ВСЕМ Telegram-игрокам сводку зала славы — просто для
+ * мотивации, а не личное достижение конкретного человека (в отличие от
+ * "лидера дня"), поэтому уходит всем сразу, а не только тем, кто в топе.
+ * Веб-гостям вместо рассылки — баннер в игре (см. /api/auth).
+ */
+async function notifyHallOfFameIfDue(now = Date.now()) {
+  if (!bot) return;
+  const curWeek = logic.weekKey(now);
+  const settings = db.getSettings();
+  if (settings.lastHallOfFameNotifyWeekKey === curWeek) return;
+
+  const shifted = new Date(now + logic.CLUB_UTC_OFFSET_HOURS * 60 * 60 * 1000);
+  if (shifted.getUTCDay() !== HALL_OF_FAME_NOTIFY_WEEKDAY) return;
+  if (shifted.getUTCHours() < HALL_OF_FAME_NOTIFY_HOUR) return;
+
+  const users = db.getAllUsers();
+  const hof = logic.buildHallOfFame(users, HALL_OF_FAME_TOP_N);
+  const text = formatHallOfFameMessage(hof);
+  for (const u of users) {
+    if (logic.isWebGuestId(u.id)) continue;
+    try {
+      await bot.api.sendMessage(u.id, text);
+    } catch (err) {
+      console.error(`Не удалось отправить зал славы игроку (${u.id}):`, err.message || err);
+    }
+  }
+  db.setLastHallOfFameNotifyWeekKey(curWeek);
+}
+
+function formatContestResultsMessage(results, reasonText) {
+  if (!results.length) {
+    return `🏁 Конкурс дня завершён (${reasonText}) — но за это время никто не забил ни одного гола.`;
+  }
+  const lines = results
+    .map((r, i) => {
+      const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
+      const platformNote = r.isTelegram ? "" : " (не из Telegram — см. ниже)";
+      return `${medal} ${r.name} — ${r.goals} ${goalsWord(r.goals)}${platformNote}`;
+    })
+    .join("\n");
+  const winner = results[0];
+  const winnerNote = winner.isTelegram
+    ? ""
+    : "\n\nПобедитель зашёл не через Telegram — у игры нет его контактов, только имя. " +
+      "Чтобы вручить приз, дождись, пока он сам напишет тебе (в объявлении о конкурсе стоит явно попросить об этом), " +
+      "и, как обычно, попроси скриншот/видео результата перед вручением.";
+  return (
+    `🏁 Конкурс дня завершён (${reasonText})!\n\n` +
+    `Участников с забитыми голами: ${results.length}\n\n${lines}\n\n` +
+    `Победитель: ${winner.name} — ${winner.goals} ${goalsWord(winner.goals)}.${winnerNote}`
+  );
+}
+
+/** Завершает конкурс (сейчас, независимо от того, истекли ли честные 24 часа
+ * или админ остановил досрочно), шлёт итоги всем ADMIN_IDS в личку и
+ * деактивирует settings.contestStartTs. */
+async function finalizeContestNow(contestStartTs, reasonText) {
+  const users = db.getAllUsers();
+  const results = logic.buildContestResults(users, contestStartTs);
+  const text = formatContestResultsMessage(results, reasonText);
+  db.setContestStart(null);
+  if (bot) {
+    for (const adminId of ADMIN_IDS) {
+      try {
+        await bot.api.sendMessage(adminId, text);
+      } catch (err) {
+        console.error(`Не удалось отправить итоги конкурса дня админу (${adminId}):`, err.message || err);
+      }
+    }
+  }
+}
+
+/** Автозавершение конкурса по истечении ровно CONTEST_DURATION_MS — проверяется тем же периодическим тиком, что и остальные рассылки. */
+async function finalizeContestIfDue(now = Date.now()) {
+  if (!bot) return;
+  const settings = db.getSettings();
+  if (!settings.contestStartTs) return;
+  if (now < settings.contestStartTs + logic.CONTEST_DURATION_MS) return;
+  await finalizeContestNow(settings.contestStartTs, "истекли отведённые 24 часа");
+}
+
 async function main() {
   if (bot) {
     try {
@@ -648,14 +786,22 @@ main();
 // Проверяем раз в 10 минут — той же периодичности достаточно, точность в
 // пределах часа тут не критична, а внешний "будильник" (см. README), который
 // пингует /healthz, всё равно не даёт бесплатному хостингу уснуть в это время.
-if (bot) {
+function runPeriodicChecks() {
   notifyDailyLeadersIfDue().catch((err) => console.error("Ошибка рассылки лидерам дня:", err));
-  setInterval(() => {
-    notifyDailyLeadersIfDue().catch((err) => console.error("Ошибка рассылки лидерам дня:", err));
-  }, 10 * 60 * 1000);
+  notifyHallOfFameIfDue().catch((err) => console.error("Ошибка рассылки зала славы:", err));
+  finalizeContestIfDue().catch((err) => console.error("Ошибка автозавершения конкурса дня:", err));
+}
+
+if (bot) {
+  runPeriodicChecks();
+  setInterval(runPeriodicChecks, 10 * 60 * 1000);
 }
 
 module.exports = app;
-// Дополнительно вешаем на экспорт сам джоб рассылки — нужно только для
-// тестов (см. test-daily-leaders.js), в проде используется app как обычно.
+// Дополнительно вешаем на экспорт сами джобы рассылок/автозавершения —
+// нужно только для тестов (см. test-daily-leaders.js, test-contest.js), в
+// проде используется app как обычно.
 module.exports.notifyDailyLeadersIfDue = notifyDailyLeadersIfDue;
+module.exports.notifyHallOfFameIfDue = notifyHallOfFameIfDue;
+module.exports.finalizeContestIfDue = finalizeContestIfDue;
+module.exports.finalizeContestNow = finalizeContestNow;

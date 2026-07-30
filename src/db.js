@@ -20,7 +20,16 @@ function ensureDataDir() {
 }
 
 function emptyState() {
-  return { users: {}, settings: { matchDayKey: null, lastLeaderNotifyDayKey: null }, duels: {} };
+  return {
+    users: {},
+    settings: {
+      matchDayKey: null,
+      lastLeaderNotifyDayKey: null,
+      lastHallOfFameNotifyWeekKey: null,
+      contestStartTs: null, // время начала текущего "конкурса дня" (см. /contest в боте) или null
+    },
+    duels: {},
+  };
 }
 
 function loadRaw() {
@@ -32,8 +41,14 @@ function loadRaw() {
     const raw = fs.readFileSync(DB_FILE, "utf8");
     if (!raw.trim()) return emptyState();
     const parsed = JSON.parse(raw);
-    if (!parsed.settings) parsed.settings = { matchDayKey: null, lastLeaderNotifyDayKey: null };
-    if (parsed.settings.lastLeaderNotifyDayKey === undefined) parsed.settings.lastLeaderNotifyDayKey = null;
+    if (!parsed.settings) parsed.settings = emptyState().settings;
+    // Мягкая миграция: если файл записан более старой версией кода, где этих
+    // полей ещё не было — просто дозаполняем значениями по умолчанию, не
+    // трогая остальное.
+    const defaults = emptyState().settings;
+    for (const key of Object.keys(defaults)) {
+      if (parsed.settings[key] === undefined) parsed.settings[key] = defaults[key];
+    }
     if (!parsed.duels) parsed.duels = {};
     return parsed;
   } catch (err) {
@@ -89,6 +104,13 @@ function getOrCreateUser(telegramId, profile = {}) {
       prevDayGoals: 0, // "замороженный" итог прошлого дня (см. ensureCurrentDay в game-logic.js)
       prevDayKey: null,
       leaderBannerShownForDay: null, // чтобы баннер "ты был лидером дня" показался в игре только один раз
+      bestStreak: 0, // рекордный streak за всё время — для зала славы (не сбрасывается вместе с streak)
+      hallOfFameBannerShownForWeek: null, // чтобы баннер зала славы показывался веб-гостю не чаще раза в неделю
+      referralCount: 0, // сколько друзей успешно привёл (см. creditReferral в game-logic.js)
+      referredBy: null, // id того, кто пригласил этого игрока (если пришёл по реферальной ссылке)
+      contestGoals: 0, // голы в счёт ТЕКУЩЕГО конкурса дня (см. recordContestGoal)
+      contestGoalsForStartTs: null, // какому именно запуску конкурса принадлежит contestGoals
+      contestGoalsReachedAt: null, // когда в последний раз обновился contestGoals — тай-брейк "кто раньше"
       achievements: [], // id значков (см. game-logic.js ACHIEVEMENTS)
       createdAt: Date.now(),
     };
@@ -136,6 +158,18 @@ function setLastLeaderNotifyDayKey(dateKey) {
   persist();
 }
 
+/** Отмечает, что еженедельная рассылка зала славы за эту неделю уже отправлена. */
+function setLastHallOfFameNotifyWeekKey(weekKey) {
+  state.settings.lastHallOfFameNotifyWeekKey = weekKey;
+  persist();
+}
+
+/** Запускает ("конкурс дня") или сбрасывает конкурс. tsOrNull — Date.now() старта, либо null (выключить). */
+function setContestStart(tsOrNull) {
+  state.settings.contestStartTs = tsOrNull;
+  persist();
+}
+
 function getDuel(id) {
   return state.duels[id] || null;
 }
@@ -157,6 +191,8 @@ module.exports = {
   getSettings,
   setMatchDay,
   setLastLeaderNotifyDayKey,
+  setLastHallOfFameNotifyWeekKey,
+  setContestStart,
   getDuel,
   saveDuel,
   getAllDuels,
