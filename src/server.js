@@ -522,6 +522,11 @@ if (BOT_TOKEN) {
   // даёт безлимит, но привязан к точному моменту запуска (ровно 24 часа),
   // а не к календарному дню, и ведёт отдельный подсчёт голов именно за это
   // окно (см. CONTEST_DURATION_MS/recordContestGoal в game-logic.js).
+  //
+  // /contest [текст приза] — запустить (или, если уже идёт, остановить)
+  //   конкурс ПРЯМО СЕЙЧАС. Всё, что написано после команды, попадёт в
+  //   анонс всем игрокам как описание приза, например:
+  //   /contest Три браслета с символикой клуба
   bot.command("contest", async (ctx) => {
     const fromId = String(ctx.from.id);
     if (ADMIN_IDS.length === 0) {
@@ -541,15 +546,92 @@ if (BOT_TOKEN) {
       const startTs = settings.contestStartTs;
       await finalizeContestNow(startTs, "остановлен вручную досрочно");
       await ctx.reply("Конкурс дня остановлен досрочно. Итоги — сообщением выше.");
-    } else {
-      db.setContestStart(now);
-      const hours = Math.round(logic.CONTEST_DURATION_MS / 3600000);
-      await ctx.reply(
-        `🏆 Конкурс дня запущен! На ближайшие ${hours} часов у ВСЕХ игроков — и из Telegram, и по обычной ссылке (ВК/браузер) — ` +
-          `безлимитные попытки. Через ${hours} часов бот сам пришлёт тебе итоги с победителем. ` +
-          `Чтобы остановить раньше срока и получить итоги прямо сейчас — отправь /contest ещё раз.`
-      );
+      return;
     }
+    if (settings.contestScheduledStart) {
+      db.setContestSchedule(null, null); // ручной запуск отменяет запланированный автостарт
+    }
+    const prizeText = (ctx.match || "").trim();
+    const hours = Math.round(logic.CONTEST_DURATION_MS / 3600000);
+    await startContestNow(now, prizeText);
+    await ctx.reply(
+      `🏆 Конкурс дня запущен! На ближайшие ${hours} часов у ВСЕХ игроков — и из Telegram, и по обычной ссылке (ВК/браузер) — ` +
+        `безлимитные попытки. Всем игрокам-подписчикам бота уже отправлено уведомление о старте. ` +
+        `Через ${hours} часов бот сам пришлёт тебе итоги с победителем. ` +
+        `Чтобы остановить раньше срока и получить итоги прямо сейчас — отправь /contest ещё раз.`
+    );
+  });
+
+  // /contest_at 2026-08-03 08:00 [текст приза] — запланировать автостарт
+  //   конкурса на конкретный момент (время указывается по времени клуба —
+  //   Ижевск/Самара, UTC+4). В нужный момент бот сам включит безлимит и
+  //   разошлёт анонс всем игрокам, без участия администратора.
+  //   ВАЖНО: бесплатный хостинг проверяет расписание раз в ~10 минут (см.
+  //   README), поэтому фактический старт может сдвинуться на несколько
+  //   минут позже указанного времени. Если нужна точность до секунды —
+  //   лучше в этот момент отправить /contest вручную.
+  bot.command("contest_at", async (ctx) => {
+    const fromId = String(ctx.from.id);
+    if (ADMIN_IDS.length === 0) {
+      await ctx.reply(
+        "ADMIN_TELEGRAM_ID ещё не настроен на сервере — команда пока недоступна никому. " +
+          "Узнай свой ID командой /myid и попроси администратора хостинга вписать его в настройки."
+      );
+      return;
+    }
+    if (!ADMIN_IDS.includes(fromId)) {
+      await ctx.reply("Эта команда только для администратора клуба.");
+      return;
+    }
+    const settings = db.getSettings();
+    const now = Date.now();
+    if (logic.isContestActive(settings, now)) {
+      await ctx.reply("Конкурс уже идёт прямо сейчас. Сначала останови его командой /contest, потом планируй новый.");
+      return;
+    }
+    const raw = (ctx.match || "").trim();
+    const m = raw.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2})\s*([\s\S]*)$/);
+    if (!m) {
+      await ctx.reply(
+        "Формат: /contest_at 2026-08-03 08:00 Текст приза\n" +
+          "Дата и время — по времени Ижевска/Самары (UTC+4). Текст приза необязателен, но попадёт в анонс всем игрокам."
+      );
+      return;
+    }
+    const startTs = logic.parseClubDateTime(m[1]);
+    if (startTs === null || Number.isNaN(startTs)) {
+      await ctx.reply("Не смог разобрать дату и время. Формат: 2026-08-03 08:00");
+      return;
+    }
+    const prizeText = m[2].trim();
+    if (startTs <= now) {
+      await startContestNow(now, prizeText);
+      const hours = Math.round(logic.CONTEST_DURATION_MS / 3600000);
+      await ctx.reply(`Указанное время уже наступило — конкурс запущен прямо сейчас, на ближайшие ${hours} часов.`);
+      return;
+    }
+    db.setContestSchedule(startTs, prizeText);
+    await ctx.reply(
+      `Запланировал старт конкурса на ${logic.formatClubDateTime(startTs)}. ` +
+        `Примерно в это время (± несколько минут — особенность бесплатного хостинга) всем игрокам-подписчикам бота ` +
+        `придёт уведомление о старте, и включится безлимитный режим для всех, включая веб-ссылку.\n\n` +
+        `Отменить план: отправь /contest_cancel.`
+    );
+  });
+
+  bot.command("contest_cancel", async (ctx) => {
+    const fromId = String(ctx.from.id);
+    if (!ADMIN_IDS.includes(fromId)) {
+      await ctx.reply("Эта команда только для администратора клуба.");
+      return;
+    }
+    const settings = db.getSettings();
+    if (!settings.contestScheduledStart) {
+      await ctx.reply("Запланированного старта конкурса сейчас нет.");
+      return;
+    }
+    db.setContestSchedule(null, null);
+    await ctx.reply("Запланированный старт конкурса отменён.");
   });
 
   bot.command("leaderboard", async (ctx) => {
@@ -693,6 +775,66 @@ async function notifyHallOfFameIfDue(now = Date.now()) {
   db.setLastHallOfFameNotifyWeekKey(curWeek);
 }
 
+/** Разослать анонс старта конкурса всем Telegram-игрокам (веб-гостям не достучаться — у них нет chat-id). */
+async function broadcastContestStart(hours, prizeText) {
+  if (!bot) return;
+  const users = db.getAllUsers();
+  const prizeLine = prizeText ? `\n\n🏅 Приз: ${prizeText}` : "";
+  const text =
+    `🏆 Стартовал конкурс дня в «Забей гол»!\n\n` +
+    `Ближайшие ${hours} часов — неограниченные попытки, играй сколько хочешь. ` +
+    `Голы за это время считаются отдельно от обычного рейтинга.` +
+    prizeLine +
+    `\n\nУдачи!`;
+  for (const u of users) {
+    if (logic.isWebGuestId(u.id)) continue;
+    try {
+      await bot.api.sendMessage(u.id, text);
+    } catch (err) {
+      console.error(`Не удалось отправить анонс конкурса игроку (${u.id}):`, err.message || err);
+    }
+  }
+}
+
+/** Запускает конкурс прямо сейчас (из /contest, /contest_at или автостарта по расписанию) и рассылает анонс. */
+async function startContestNow(now, prizeText) {
+  db.setContestStart(now);
+  db.setContestSchedule(null, null);
+  const hours = Math.round(logic.CONTEST_DURATION_MS / 3600000);
+  await broadcastContestStart(hours, prizeText);
+}
+
+/** Проверяет, не пора ли автоматически стартовать заранее запланированный конкурс (см. /contest_at). */
+async function startScheduledContestIfDue(now = Date.now()) {
+  if (!bot) return;
+  const settings = db.getSettings();
+  if (!settings.contestScheduledStart) return;
+  if (logic.isContestActive(settings, now)) return;
+  if (now < settings.contestScheduledStart) return;
+  await startContestNow(now, settings.contestScheduledPrizeText || "");
+}
+
+/** Личное сообщение участнику конкурса с его результатом — в дополнение к сводке администратору. */
+function formatParticipantContestMessage(participant, results, reasonText) {
+  const rank = results.findIndex((r) => r.id === participant.id) + 1;
+  const isWinner = rank === 1;
+  const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `${rank}.`;
+  const top = results
+    .slice(0, 5)
+    .map((r, i) => {
+      const m = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
+      return `${m} ${r.name} — ${r.goals} ${goalsWord(r.goals)}`;
+    })
+    .join("\n");
+  const personalLine = isWinner
+    ? `🎉 Поздравляем — ты первый, ${participant.goals} ${goalsWord(participant.goals)}! Скоро с тобой свяжутся насчёт приза.`
+    : `Твой результат: ${medal} место, ${participant.goals} ${goalsWord(participant.goals)}.`;
+  return (
+    `🏁 Конкурс дня завершён (${reasonText})!\n\n${personalLine}\n\nТоп участников:\n${top}\n\n` +
+    `Спасибо, что играл — впереди ещё будут конкурсы!`
+  );
+}
+
 function formatContestResultsMessage(results, reasonText) {
   if (!results.length) {
     return `🏁 Конкурс дня завершён (${reasonText}) — но за это время никто не забил ни одного гола.`;
@@ -731,6 +873,17 @@ async function finalizeContestNow(contestStartTs, reasonText) {
         await bot.api.sendMessage(adminId, text);
       } catch (err) {
         console.error(`Не удалось отправить итоги конкурса дня админу (${adminId}):`, err.message || err);
+      }
+    }
+    // Участникам из Telegram (веб-гостям не достучаться) — тоже присылаем
+    // персональный итог, чтобы держать их в игре и не молчать про результат.
+    for (const r of results) {
+      if (!r.isTelegram) continue;
+      if (ADMIN_IDS.includes(String(r.id))) continue; // админ уже получил полную сводку выше
+      try {
+        await bot.api.sendMessage(r.id, formatParticipantContestMessage(r, results, reasonText));
+      } catch (err) {
+        console.error(`Не удалось отправить итоги конкурса участнику (${r.id}):`, err.message || err);
       }
     }
   }
@@ -789,6 +942,7 @@ main();
 function runPeriodicChecks() {
   notifyDailyLeadersIfDue().catch((err) => console.error("Ошибка рассылки лидерам дня:", err));
   notifyHallOfFameIfDue().catch((err) => console.error("Ошибка рассылки зала славы:", err));
+  startScheduledContestIfDue().catch((err) => console.error("Ошибка автостарта запланированного конкурса дня:", err));
   finalizeContestIfDue().catch((err) => console.error("Ошибка автозавершения конкурса дня:", err));
 }
 
@@ -805,3 +959,5 @@ module.exports.notifyDailyLeadersIfDue = notifyDailyLeadersIfDue;
 module.exports.notifyHallOfFameIfDue = notifyHallOfFameIfDue;
 module.exports.finalizeContestIfDue = finalizeContestIfDue;
 module.exports.finalizeContestNow = finalizeContestNow;
+module.exports.startContestNow = startContestNow;
+module.exports.startScheduledContestIfDue = startScheduledContestIfDue;

@@ -673,4 +673,26 @@ check("buildContestResults сортирует по голам, при равен
   assert.strictEqual(results[1].isTelegram, true);
 });
 
+check("parseClubDateTime разбирает 'YYYY-MM-DD HH:MM' как время клуба (UTC+4)", () => {
+  const ts = logic.parseClubDateTime("2026-08-03 08:00");
+  // 08:00 по времени клуба (UTC+4) = 04:00 UTC
+  const d = new Date(ts);
+  assert.strictEqual(d.getUTCFullYear(), 2026);
+  assert.strictEqual(d.getUTCMonth(), 7); // август = индекс 7
+  assert.strictEqual(d.getUTCDate(), 3);
+  assert.strictEqual(d.getUTCHours(), 4);
+  assert.strictEqual(d.getUTCMinutes(), 0);
+
+  assert.strictEqual(logic.parseClubDateTime("не дата"), null);
+  assert.strictEqual(logic.parseClubDateTime(""), null);
+  assert.strictEqual(logic.parseClubDateTime("2026-08-03T08:00"), ts); // с "T" тоже работает
+});
+
+check("formatClubDateTime форматирует обратно в читаемую строку по времени клуба", () => {
+  const ts = logic.parseClubDateTime("2026-08-03 08:00");
+  const text = logic.formatClubDateTime(ts);
+  assert.ok(text.includes("03.08.2026"), text);
+  assert.ok(text.includes("08:00"), text);
+});
+
 console.log(`\n${passed} тест(ов) пройдено успешно.`);

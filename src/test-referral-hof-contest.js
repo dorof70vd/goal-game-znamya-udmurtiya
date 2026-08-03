@@ -231,6 +231,66 @@ async function main() {
     assert.ok(attemptedAdmin, `ожидали попытку отправки итогов админу 700000, лог: ${JSON.stringify(errorLog)}`);
   });
 
+  await check("finalizeContestNow шлёт личные итоги участникам из Telegram (не только админу)", async () => {
+    const contestStartTs = Date.now();
+    db.setContestStart(contestStartTs);
+
+    // Ещё один telegram-участник (не админ), забивает голы в счёт конкурса.
+    const participantId = "600030";
+    await auth(base, { initData: `dev:${participantId}` });
+    const start3 = await fetch(`${base}/api/match/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: `dev:${participantId}` }),
+    }).then((r) => r.json());
+    await fetch(`${base}/api/match/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: `dev:${participantId}`, token: start3.token, goals: 2 }),
+    }).then((r) => r.json());
+
+    errorLog.length = 0;
+    await app.finalizeContestNow(contestStartTs, "тестовое завершение с участником");
+    const attemptedParticipant = errorLog.some((l) => l.includes(participantId));
+    assert.ok(attemptedParticipant, `ожидали попытку личной отправки итогов участнику ${participantId}, лог: ${JSON.stringify(errorLog)}`);
+  });
+
+  await check("startContestNow запускает конкурс и рассылает анонс всем Telegram-игрокам (веб-гостям — нет)", async () => {
+    db.setContestStart(null); // на всякий случай, чтобы предыдущий тест не мешал
+    errorLog.length = 0;
+    const now = Date.now();
+    await app.startContestNow(now, "Три браслета с символикой клуба");
+    assert.strictEqual(db.getSettings().contestStartTs, now);
+    assert.strictEqual(db.getSettings().contestScheduledStart, null);
+
+    // 600001 — telegram-игрок из более раннего теста, ему должна прийти попытка рассылки.
+    const attemptedTelegram = errorLog.some((l) => l.includes("600001"));
+    assert.ok(attemptedTelegram, `ожидали попытку анонса telegram-игроку 600001, лог: ${JSON.stringify(errorLog)}`);
+    // веб-гостю (web_invitee01) рассылка не должна даже пытаться уйти — у него нет chat-id.
+    const attemptedWebGuest = errorLog.some((l) => l.includes("web_invitee01"));
+    assert.strictEqual(attemptedWebGuest, false, "веб-гостю анонс не должен отправляться");
+
+    await app.finalizeContestNow(now, "тестовое завершение анонса");
+  });
+
+  await check("/contest_at планирует автостарт, startScheduledContestIfDue стартует не раньше срока", async () => {
+    db.setContestSchedule(null, null);
+    const now = Date.now();
+    const future = now + 3600000; // через час
+    db.setContestSchedule(future, "Тестовый приз");
+
+    errorLog.length = 0;
+    await app.startScheduledContestIfDue(now); // ещё рано
+    assert.strictEqual(db.getSettings().contestStartTs, null);
+    assert.strictEqual(db.getSettings().contestScheduledStart, future);
+
+    await app.startScheduledContestIfDue(future + 1000); // время настало
+    assert.strictEqual(db.getSettings().contestStartTs, future + 1000);
+    assert.strictEqual(db.getSettings().contestScheduledStart, null); // план очищен после старта
+
+    await app.finalizeContestNow(future + 1000, "тестовое завершение по расписанию");
+  });
+
   await check("finalizeContestIfDue не завершает конкурс раньше 24 часов, но завершает после", async () => {
     const startTs = Date.now();
     db.setContestStart(startTs);

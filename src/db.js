@@ -27,6 +27,8 @@ function emptyState() {
       lastLeaderNotifyDayKey: null,
       lastHallOfFameNotifyWeekKey: null,
       contestStartTs: null, // время начала текущего "конкурса дня" (см. /contest в боте) или null
+      contestScheduledStart: null, // время запланированного старта конкурса (см. /contest_at), пока он ещё не начался
+      contestScheduledPrizeText: null, // текст про приз для анонса, когда запланированный конкурс стартует
     },
     duels: {},
   };
@@ -170,6 +172,13 @@ function setContestStart(tsOrNull) {
   persist();
 }
 
+/** Планирует будущий автостарт конкурса (см. /contest_at) — tsOrNull — момент старта или null (отменить план). */
+function setContestSchedule(tsOrNull, prizeText = null) {
+  state.settings.contestScheduledStart = tsOrNull;
+  state.settings.contestScheduledPrizeText = tsOrNull ? prizeText || null : null;
+  persist();
+}
+
 function getDuel(id) {
   return state.duels[id] || null;
 }
@@ -193,6 +202,7 @@ module.exports = {
   setLastLeaderNotifyDayKey,
   setLastHallOfFameNotifyWeekKey,
   setContestStart,
+  setContestSchedule,
   getDuel,
   saveDuel,
   getAllDuels,

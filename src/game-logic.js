@@ -146,6 +146,32 @@ function weekKey(ts) {
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
+/**
+ * Разбирает строку "YYYY-MM-DD HH:MM" (или с "T" вместо пробела), считая её
+ * временем клуба (Ижевск/Самара, см. CLUB_UTC_OFFSET_HOURS), и возвращает
+ * абсолютный timestamp (мс, UTC). Возвращает null, если строка не подходит
+ * под формат. Используется для планирования старта конкурса (/contest_at).
+ */
+function parseClubDateTime(str) {
+  const m = String(str || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]), h = Number(m[4]), mi = Number(m[5]);
+  const utcIfLocalWereUtc = Date.UTC(y, mo - 1, d, h, mi);
+  if (Number.isNaN(utcIfLocalWereUtc)) return null;
+  return utcIfLocalWereUtc - CLUB_UTC_OFFSET_HOURS * 60 * 60 * 1000;
+}
+
+/** Форматирует timestamp как "DD.MM.YYYY HH:MM (время Ижевска)" — для сообщений бота. */
+function formatClubDateTime(ts) {
+  const d = shiftedDate(ts);
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const min = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${dd}.${mm}.${yyyy} ${hh}:${min} (время Ижевска)`;
+}
+
 function daysBetweenKeys(prevKey, curKey) {
   if (!prevKey) return Infinity;
   const [py, pm, pd] = prevKey.split("-").map(Number);
@@ -787,6 +813,8 @@ module.exports = {
   DUEL_DIFFICULTY_LEVEL,
   dateKey,
   weekKey,
+  parseClubDateTime,
+  formatClubDateTime,
   applyEnergyRegen,
   msUntilNextEnergy,
   registerDailyLogin,
