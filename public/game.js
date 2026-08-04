@@ -911,7 +911,8 @@
     return (
       `🥅 Лучший результат за матч:\n${fmtHofRows(hof.bestMatch, "гол")}\n\n` +
       `🔥 Самый длинный стрик подряд:\n${fmtHofRows(hof.longestStreak, "дн.")}\n\n` +
-      `⚽ Больше всего голов за всё время:\n${fmtHofRows(hof.totalGoals, "гол")}`
+      `⚽ Больше всего голов за всё время:\n${fmtHofRows(hof.totalGoals, "гол")}\n\n` +
+      `🏔 Рекордный уровень:\n${fmtHofRows(hof.topLevel, "уровень")}`
     );
   }
 

@@ -740,6 +740,7 @@ function formatHallOfFameMessage(hof) {
     `🥅 Лучший результат за матч:\n${fmtRows(hof.bestMatch, "гол")}\n\n` +
     `🔥 Самый длинный стрик подряд:\n${fmtRows(hof.longestStreak, "дн.")}\n\n` +
     `⚽ Больше всего голов за всё время:\n${fmtRows(hof.totalGoals, "гол")}\n\n` +
+    `🏔 Рекордный уровень:\n${fmtRows(hof.topLevel, "уровень")}\n\n` +
     `Заходи почаще — может, следующим в зале славы будешь ты!`
   );
 }

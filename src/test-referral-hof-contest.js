@@ -106,18 +106,21 @@ async function main() {
 
   // ------------------------- Зал славы -------------------------
 
-  await check("/api/hall-of-fame отдаёт три категории", async () => {
+  await check("/api/hall-of-fame отдаёт четыре категории (включая рекордный уровень)", async () => {
     const u = db.getUser("600001");
     u.bestScore = 5;
     u.bestStreak = 7;
     u.totalGoals = 42;
+    u.level = 33; // за MAX_LEVEL — проверяем, что рекордный уровень тоже отдаётся
     db.saveUser(u);
 
     const hof = await fetch(`${base}/api/hall-of-fame`).then((r) => r.json());
     assert.ok(Array.isArray(hof.bestMatch));
     assert.ok(Array.isArray(hof.longestStreak));
     assert.ok(Array.isArray(hof.totalGoals));
+    assert.ok(Array.isArray(hof.topLevel));
     assert.ok(hof.totalGoals.some((r) => r.id === "600001" && r.value === 42));
+    assert.ok(hof.topLevel.some((r) => r.id === "600001" && r.value === 33));
   });
 
   await check("веб-гость видит баннер зала славы раз в неделю, не чаще", async () => {

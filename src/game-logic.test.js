@@ -131,6 +131,19 @@ check("неидеальный матч не поднимает уровень", 
   assert.strictEqual(u.level, 4);
 });
 
+check("прогресс уровня больше не упирается в MAX_LEVEL — идеальный матч поднимает уровень и после потолка", () => {
+  const u = freshUser({ energy: 3, level: logic.MAX_LEVEL });
+  const now = Date.now();
+  const token = logic.startMatch(u, now);
+  const res = logic.submitMatchResult(u, token, 5, now + 1000);
+  assert.strictEqual(u.level, logic.MAX_LEVEL + 1); // раньше здесь застревало на MAX_LEVEL
+
+  const u2 = freshUser({ energy: 3, level: logic.MAX_LEVEL + 50 });
+  const token2 = logic.startMatch(u2, now);
+  logic.submitMatchResult(u2, token2, 5, now + 1000);
+  assert.strictEqual(u2.level, logic.MAX_LEVEL + 51); // растёт и заметно выше потолка
+});
+
 check("неверный токен матча отклоняется", () => {
   const u = freshUser({ energy: 3 });
   logic.startMatch(u, Date.now());
@@ -324,21 +337,59 @@ check("достижения за стрик и уровень срабатыва
   assert.ok(newly.includes("level_20"));
   assert.ok(newly.includes("goals_50"));
   assert.ok(newly.includes("goals_200"));
+  assert.ok(!newly.includes("level_max")); // 20 < MAX_LEVEL
+  assert.ok(!newly.includes("level_legend"));
 });
 
-check("именные уровни сложности разбиты на три равные трети", () => {
+check("достижение «Легенда» выдаётся, только когда уровень реально превысил MAX_LEVEL", () => {
+  const uAtCap = freshUser({ level: logic.MAX_LEVEL });
+  const newlyAtCap = logic.checkAchievements(uAtCap, {});
+  assert.ok(newlyAtCap.includes("level_max"));
+  assert.ok(!newlyAtCap.includes("level_legend")); // ровно на потолке — ещё не легенда
+
+  const uPastCap = freshUser({ level: logic.MAX_LEVEL + 1 });
+  const newlyPastCap = logic.checkAchievements(uPastCap, {});
+  assert.ok(newlyPastCap.includes("level_max"));
+  assert.ok(newlyPastCap.includes("level_legend"));
+});
+
+check("именные уровни сложности разбиты на три равные трети, а дальше — Легенда и Бессмертный", () => {
   assert.strictEqual(logic.getDifficultyTierName(1), "Лёгкий");
   assert.strictEqual(logic.getDifficultyTierName(10), "Лёгкий");
   assert.strictEqual(logic.getDifficultyTierName(11), "Средний");
   assert.strictEqual(logic.getDifficultyTierName(20), "Средний");
   assert.strictEqual(logic.getDifficultyTierName(21), "Мастер");
   assert.strictEqual(logic.getDifficultyTierName(30), "Мастер");
+  // Уровень больше не обрезается сверху — за "Мастером" идёт "Легенда" (второй
+  // круг соперников, см. OPPONENTS.length), а дальше — "Бессмертный" навсегда.
+  const legendStart = logic.MAX_LEVEL + 1;
+  const legendEnd = logic.MAX_LEVEL + logic.OPPONENTS.length;
+  assert.strictEqual(logic.getDifficultyTierName(legendStart), "Легенда");
+  assert.strictEqual(logic.getDifficultyTierName(legendEnd), "Легенда");
+  assert.strictEqual(logic.getDifficultyTierName(legendEnd + 1), "Бессмертный");
+  assert.strictEqual(logic.getDifficultyTierName(legendEnd + 500), "Бессмертный");
 });
 
 check("getKeeperDifficulty включает название текущего уровня сложности", () => {
   assert.strictEqual(logic.getKeeperDifficulty(5).tier, "Лёгкий");
   assert.strictEqual(logic.getKeeperDifficulty(15).tier, "Средний");
   assert.strictEqual(logic.getKeeperDifficulty(25).tier, "Мастер");
+  assert.strictEqual(logic.getKeeperDifficulty(logic.MAX_LEVEL + 5).tier, "Легенда");
+  assert.strictEqual(logic.getKeeperDifficulty(logic.MAX_LEVEL + 500).tier, "Бессмертный");
+});
+
+check("getKeeperDifficulty выходит на плато далеко за MAX_LEVEL — сложность не растёт вечно буквально", () => {
+  const veryHigh = logic.getKeeperDifficulty(logic.MAX_LEVEL + 200);
+  const evenHigher = logic.getKeeperDifficulty(logic.MAX_LEVEL + 5000);
+  // На таких уровнях reactionMs/coverage/feintChance уже упёрлись в свои
+  // предельные значения (см. Math.max/Math.min внутри getKeeperDifficulty) —
+  // дальше игра объективно не может стать ещё сложнее, но и не ломается.
+  assert.strictEqual(veryHigh.reactionMs, 220);
+  assert.strictEqual(evenHigher.reactionMs, 220);
+  assert.strictEqual(veryHigh.coverage, 0.85);
+  assert.strictEqual(evenHigher.coverage, 0.85);
+  assert.strictEqual(veryHigh.feintChance, 0.35);
+  assert.strictEqual(evenHigher.feintChance, 0.35);
 });
 
 check("переход на новый уровень сложности отмечается флагом tierChanged", () => {
@@ -435,11 +486,13 @@ check("дорожка соперников показывает пройденн
   assert.strictEqual(road.find((r) => r.level === 8).status, "upcoming");
 });
 
-check("дорожка соперников не выходит за начало и конец списка уровней", () => {
+check("дорожка соперников не выходит за начало списка, но не обрезается сверху (уровень бесконечен)", () => {
   const roadStart = logic.buildOpponentRoad(1, 2, 3);
   assert.strictEqual(roadStart[0].level, 1);
+  // Раньше "предстоящие" обрезались на MAX_LEVEL — теперь прогресс бесконечен,
+  // и дорожка должна показывать соперников и ЗА пределами классического списка.
   const roadEnd = logic.buildOpponentRoad(logic.MAX_LEVEL, 2, 3);
-  assert.strictEqual(roadEnd[roadEnd.length - 1].level, logic.MAX_LEVEL);
+  assert.strictEqual(roadEnd[roadEnd.length - 1].level, logic.MAX_LEVEL + 3);
 });
 
 check("тренировка не тратит энергию, не меняет уровень и не пишется в статистику", () => {
@@ -617,17 +670,19 @@ check("registerDailyLogin копит bestStreak даже после сброса
   assert.strictEqual(u.bestStreak, 3); // а рекорд остаётся
 });
 
-check("buildHallOfFame возвращает топ-N по трём категориям, игнорируя нулевые значения", () => {
+check("buildHallOfFame возвращает топ-N по четырём категориям, игнорируя нулевые значения", () => {
   const users = [
-    freshUser({ id: "1", firstName: "А", bestScore: 5, bestStreak: 10, totalGoals: 100 }),
-    freshUser({ id: "2", firstName: "Б", bestScore: 3, bestStreak: 20, totalGoals: 50 }),
-    freshUser({ id: "3", firstName: "В", bestScore: 0, bestStreak: 0, totalGoals: 0 }), // ничего не набрал — не должен попасть
+    freshUser({ id: "1", firstName: "А", bestScore: 5, bestStreak: 10, totalGoals: 100, level: 45 }),
+    freshUser({ id: "2", firstName: "Б", bestScore: 3, bestStreak: 20, totalGoals: 50, level: 12 }),
+    freshUser({ id: "3", firstName: "В", bestScore: 0, bestStreak: 0, totalGoals: 0, level: 1 }), // ничего не набрал — не должен попасть
   ];
   const hof = logic.buildHallOfFame(users, 3);
   assert.deepStrictEqual(hof.bestMatch.map((r) => r.id), ["1", "2"]);
   assert.deepStrictEqual(hof.longestStreak.map((r) => r.id), ["2", "1"]);
   assert.deepStrictEqual(hof.totalGoals.map((r) => r.id), ["1", "2"]);
+  assert.deepStrictEqual(hof.topLevel.map((r) => r.id), ["1", "2"]); // "В" на уровне 1 (по умолчанию) не попадает
   assert.strictEqual(hof.bestMatch[0].value, 5);
+  assert.strictEqual(hof.topLevel[0].value, 45);
 });
 
 check("isContestActive учитывает окно ровно CONTEST_DURATION_MS от старта", () => {

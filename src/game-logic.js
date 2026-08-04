@@ -72,6 +72,7 @@ const ACHIEVEMENTS = [
   { id: "level_10", title: "Знаток лиги", desc: "Дойди до 10-го соперника." },
   { id: "level_20", title: "Ветеран", desc: "Дойди до 20-го соперника." },
   { id: "level_max", title: "Чемпион сезона", desc: "Пройди весь список соперников." },
+  { id: "level_legend", title: "Легенда", desc: "Пройди дальше 30-го уровня — там, где раньше был потолок сложности." },
   { id: "goals_50", title: "Полсотни", desc: "Забей 50 голов всего (по всем матчам)." },
   { id: "goals_200", title: "Двести", desc: "Забей 200 голов всего (по всем матчам)." },
   { id: "referral_1", title: "Заводила", desc: "Пригласи друга в игру по личной ссылке." },
@@ -114,6 +115,7 @@ function checkAchievements(user, matchInfo = {}) {
   if (user.level >= 10) unlockAchievement(user, "level_10", newly);
   if (user.level >= 20) unlockAchievement(user, "level_20", newly);
   if (user.level >= MAX_LEVEL) unlockAchievement(user, "level_max", newly);
+  if (user.level > MAX_LEVEL) unlockAchievement(user, "level_legend", newly);
   if (user.totalGoals >= 50) unlockAchievement(user, "goals_50", newly);
   if (user.totalGoals >= 200) unlockAchievement(user, "goals_200", newly);
   if ((user.referralCount || 0) >= 1) unlockAchievement(user, "referral_1", newly);
@@ -371,21 +373,34 @@ function buildDailyLeaders(users, now = Date.now(), topN = 1) {
 // чтобы игроку было наглядно видно "я прошёл Лёгкий, играю на Среднем", а не
 // просто безликие цифры уровня. Прогресс между этажами остаётся автоматическим
 // (как и раньше — забил идеальный матч, перешёл на уровень выше).
+//
+// ВАЖНО: раньше прогресс жёстко останавливался на MAX_LEVEL (30) — сильные
+// игроки упирались в потолок и сложность переставала расти. Теперь уровень
+// растёт БЕСКОНЕЧНО (см. submitMatchResult), а после "Мастера" идут ещё два
+// этажа для тех, кто продолжает играть дальше классического списка соперников
+// (см. OPPONENTS/getOpponentName — там уже был предусмотрен "круг 2, 3..."
+// на этот случай). Сама сложность вратаря (см. getKeeperDifficulty) при этом
+// естественно выходит на плато уже около 35-40 уровня — игра не становится
+// буквально непроходимой, но дальше практически не может стать ещё сложнее.
 const DIFFICULTY_TIERS = [
   { name: "Лёгкий", maxLevel: Math.round(MAX_LEVEL / 3) },
   { name: "Средний", maxLevel: Math.round((MAX_LEVEL / 3) * 2) },
   { name: "Мастер", maxLevel: MAX_LEVEL },
+  { name: "Легенда", maxLevel: MAX_LEVEL + OPPONENTS.length }, // второй круг соперников
+  { name: "Бессмертный", maxLevel: Infinity }, // дальше предел — только в самом игроке
 ];
 
 function getDifficultyTierName(level) {
-  const lvl = Math.max(1, Math.min(MAX_LEVEL, Math.round(level)));
+  const lvl = Math.max(1, Math.round(level));
   const tier = DIFFICULTY_TIERS.find((t) => lvl <= t.maxLevel);
   return tier ? tier.name : DIFFICULTY_TIERS[DIFFICULTY_TIERS.length - 1].name;
 }
 
-/** Параметры сложности вратаря на заданном уровне. */
+/** Параметры сложности вратаря на заданном уровне. Уровень больше не обрезается
+ * сверху — но сама формула (max/min внутри) естественно выходит на плато
+ * задолго до заоблачных уровней, так что игра остаётся честной, просто очень сложной. */
 function getKeeperDifficulty(level) {
-  const lvl = Math.max(1, Math.min(MAX_LEVEL, level));
+  const lvl = Math.max(1, level);
   // Реакция вратаря (мс на перемещение к точке удара) — чем меньше, тем сложнее.
   const reactionMs = Math.max(220, 620 - lvl * 13);
   // Доля ворот, которую вратарь способен "закрыть" одним броском (0..1).
@@ -438,7 +453,9 @@ function submitMatchResult(user, token, goals, now = Date.now()) {
 
   const perfect = safeGoals === SHOTS_PER_MATCH;
   const prevLevel = user.level;
-  if (perfect && user.level < MAX_LEVEL) {
+  // Прогресс больше не упирается в потолок MAX_LEVEL — растёт, пока игрок
+  // продолжает выбивать идеальные матчи (см. комментарий у DIFFICULTY_TIERS).
+  if (perfect) {
     user.level += 1;
   }
   user.activeMatch = null;
@@ -629,7 +646,7 @@ function buildLeaderboard(users, now = Date.now(), limit = 20) {
 function buildOpponentRoad(level, behind = 2, ahead = 4) {
   const lvl = Math.max(1, Math.round(level));
   const from = Math.max(1, lvl - behind);
-  const to = Math.min(MAX_LEVEL, lvl + ahead);
+  const to = lvl + ahead; // уровень больше не ограничен сверху MAX_LEVEL
   const road = [];
   for (let l = from; l <= to; l++) {
     road.push({
@@ -674,7 +691,15 @@ function buildHallOfFame(users, topN = 3) {
     .slice(0, topN)
     .map((u) => toRow(u, u.totalGoals));
 
-  return { bestMatch, longestStreak, totalGoals };
+  // user.level никогда не уменьшается (см. submitMatchResult) — сам по себе
+  // уже является "рекордным" показателем, отдельное поле не нужно.
+  const topLevel = [...users]
+    .filter((u) => (u.level || 1) > 1)
+    .sort((a, b) => (b.level || 1) - (a.level || 1))
+    .slice(0, topN)
+    .map((u) => toRow(u, u.level));
+
+  return { bestMatch, longestStreak, totalGoals, topLevel };
 }
 
 // ------------------------- Конкурс дня (с реальным призом) ------------------
